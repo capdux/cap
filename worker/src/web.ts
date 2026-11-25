@@ -3,8 +3,19 @@
 import type { Env, PackageRow, VersionRow } from "./types";
 
 interface PackageListRow extends PackageRow {
-  archive_format: "zst" | "tgz" | null;
+  archive_format: "cap" | "zst" | "tgz" | null;
   archive_size: number | null;
+}
+
+function formatArchiveExt(fmt: string | null | undefined): string {
+  if (fmt === "tgz") return ".tgz";
+  if (fmt === "zst") return ".tar.zst";
+  return ".cap";
+}
+
+function shortSignature(sig: string | null | undefined): string {
+  if (!sig) return "—";
+  return sig.length > 34 ? `${sig.slice(0, 34)}…` : sig;
 }
 
 interface PortalStats {
@@ -268,6 +279,31 @@ a:hover { text-decoration: underline; }
 .badge-ai { color: #f472b6; border-color: rgba(244, 114, 182, 0.4); background: rgba(244, 114, 182, 0.12); }
 .badge-warn { color: var(--amber); border-color: rgba(251, 191, 36, 0.4); background: rgba(251, 191, 36, 0.1); }
 .badge-err { color: var(--red); border-color: rgba(248, 113, 113, 0.45); background: rgba(248, 113, 113, 0.12); }
+.badge-verified { color: #34d399; border-color: rgba(52, 211, 153, 0.55); background: rgba(16, 185, 129, 0.14); box-shadow: 0 0 12px rgba(52, 211, 153, 0.14); }
+.badge-perm { color: #fbbf24; border-color: rgba(251, 191, 36, 0.4); background: rgba(251, 191, 36, 0.09); }
+.topbar-auth { display: flex; align-items: center; gap: 6px; }
+.topbar-auth a { font-size: 0.84rem; font-weight: 600; padding: 6px 10px; border-radius: 7px; color: var(--muted); border: 1px solid transparent; transition: color .15s, border-color .15s, background .15s; }
+.topbar-auth a:hover, .topbar-auth a.active { color: var(--text); background: rgba(255, 255, 255, 0.06); text-decoration: none; }
+.topbar-auth a.auth-cta { color: var(--accent); border-color: rgba(56, 189, 248, 0.35); background: rgba(56, 189, 248, 0.1); }
+.topbar-auth a.auth-cta:hover, .topbar-auth a.auth-cta.active { border-color: var(--accent); background: rgba(56, 189, 248, 0.18); }
+
+/* Auth & Dashboard */
+.auth-wrap { max-width: 460px; margin: 56px auto 80px; padding: 0 20px; }
+.auth-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 14px; padding: 28px 26px; box-shadow: 0 18px 40px rgba(0, 0, 0, 0.35); }
+.auth-title { margin: 0 0 6px; font-size: 1.45rem; font-weight: 800; letter-spacing: -0.02em; }
+.form-group { margin-bottom: 14px; }
+.form-label { display: block; font-size: 0.8rem; font-weight: 600; color: var(--muted); margin-bottom: 6px; font-family: var(--mono); }
+.form-input, .form-select { width: 100%; background: var(--bg-elev); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 9px 12px; font-size: 0.9rem; font-family: var(--mono); outline: none; }
+.form-input:focus, .form-select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.15); }
+.alert-err { display: none; background: rgba(248, 113, 113, 0.12); border: 1px solid rgba(248, 113, 113, 0.45); color: #fecaca; border-radius: 8px; padding: 10px 12px; font-size: 0.85rem; margin-bottom: 14px; }
+.alert-ok { display: none; background: rgba(52, 211, 153, 0.12); border: 1px solid rgba(52, 211, 153, 0.45); color: #a7f3d0; border-radius: 8px; padding: 10px 12px; font-size: 0.85rem; margin-bottom: 14px; }
+.secret-box { display: none; background: #06131c; border: 1px solid rgba(52, 211, 153, 0.5); border-radius: 10px; padding: 14px; margin: 14px 0; }
+.btn-danger { background: rgba(248, 113, 113, 0.14); color: #fca5a5; border: 1px solid rgba(248, 113, 113, 0.4); padding: 4px 9px; border-radius: 6px; font-family: var(--mono); font-size: 0.75rem; font-weight: 600; cursor: pointer; }
+.btn-danger:hover { background: rgba(248, 113, 113, 0.25); }
+.btn-ghost { background: transparent; color: var(--muted); border: 1px solid var(--border); padding: 6px 12px; border-radius: 7px; font-size: 0.82rem; font-weight: 600; cursor: pointer; }
+.btn-ghost:hover { color: var(--text); border-color: var(--border-hi); }
+.dash-grid { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 20px; margin: 24px 0 64px; align-items: start; }
+@media (max-width: 900px) { .dash-grid { grid-template-columns: 1fr; } }
 .pkg-foot { margin-top: auto; display: flex; align-items: center; justify-content: space-between; font-family: var(--mono); font-size: 0.76rem; color: var(--muted); padding-top: 8px; border-top: 1px solid rgba(30, 42, 68, 0.7); }
 
 /* Detail page */
@@ -337,7 +373,7 @@ function renderLayout(opts: {
   title: string;
   description: string;
   env: Env;
-  activeNav?: "all" | "@cap" | "@web";
+  activeNav?: "all" | "@cap" | "@web" | "login" | "register" | "dashboard";
   query?: string;
   scope?: string;
   body: string;
@@ -376,11 +412,16 @@ function renderLayout(opts: {
         <input class="search-input" type="search" name="q" value="${escapeHtml(queryVal)}" placeholder="Search @cap/lru, @web/jwt, zstd..." aria-label="Search packages">
         <button class="btn" type="submit">Search</button>
       </form>
+      <div class="topbar-auth" aria-label="Account navigation">
+        <a href="/login" class="${opts.activeNav === "login" ? "active" : ""}">Sign In</a>
+        <a href="/register" class="${opts.activeNav === "register" ? "active" : ""}">Register</a>
+        <a href="/dashboard" class="auth-cta ${opts.activeNav === "dashboard" ? "active" : ""}">Dashboard</a>
+      </div>
     </div>
   </header>
   <main>${opts.body}</main>
   <footer class="wrap footer">
-    <div><strong>capdux.org</strong> — Official CP &amp; Cap Package Registry · Zstd (<code>.tar.zst</code>) + Sparse Index</div>
+    <div><strong>capdux.org</strong> — Official CP &amp; Cap Package Registry · Zstd (<code>.cap</code>) + Ed25519 Attestation + Sparse Index</div>
     <div>Powered by Cloudflare Workers, D1 &amp; R2 Zero-Egress Edge</div>
   </footer>
   ${COPY_SCRIPT}
@@ -465,7 +506,7 @@ export async function renderHomePage(env: Env, url: URL): Promise<Response> {
       : `<div class="pkg-grid">
           ${packages
             .map((pkg) => {
-              const fmt = pkg.archive_format === "tgz" ? ".tgz" : ".tar.zst";
+              const fmt = formatArchiveExt(pkg.archive_format);
               const href = `/packages/${encodePackagePath(pkg.name)}`;
               const verText = pkg.latest_version ? `v${pkg.latest_version}` : "0.0.0";
               const licText = pkg.license || "MIT";
@@ -642,8 +683,71 @@ export async function renderPackagePage(env: Env, pkgName: string): Promise<Resp
   } catch {}
 
   const dcpContent = (latestVer?.types_dcp || "").trim();
-  const latestFmt = latestVer?.archive_format === "tgz" ? ".tgz" : ".tar.zst";
+  const latestFmt = formatArchiveExt(latestVer?.archive_format);
   const activeNav: "all" | "@cap" | "@web" = pkg.scope === "@cap" ? "@cap" : pkg.scope === "@web" ? "@web" : "all";
+
+  const securityStatus = (latestVer?.security_status || "").trim();
+  const platformSig = (latestVer?.platform_sig || "").trim();
+  const signingKeyId = (latestVer?.signing_key_id || "").trim();
+  const isVerified = securityStatus === "verified" || platformSig.length > 0;
+
+  const manifestObj = parseJsonObject<Record<string, unknown>>(latestVer?.manifest_json, {});
+  const permsFromCol = parseJsonObject<Record<string, unknown>>(latestVer?.permissions_json, {});
+  const permsFromManifest =
+    manifestObj.permissions && typeof manifestObj.permissions === "object" && !Array.isArray(manifestObj.permissions)
+      ? (manifestObj.permissions as Record<string, unknown>)
+      : {};
+  const permissionsMap = Object.keys(permsFromCol).length > 0 ? permsFromCol : permsFromManifest;
+  const permissionEntries = Object.entries(permissionsMap);
+
+  const permissionsHtml =
+    permissionEntries.length === 0
+      ? `<div class="badges"><span class="badge badge-verified">Zero Permissions · Sandboxed</span></div>
+         <p class="muted" style="font-size:0.82rem;margin:8px 0 0;">This package declares no privileged system capabilities (fs, net, env, ffi, subprocess).</p>`
+      : permissionEntries
+          .map(([permKey, permVal]) => {
+            const valText =
+              typeof permVal === "boolean"
+                ? permVal
+                  ? "allowed"
+                  : "denied"
+                : Array.isArray(permVal)
+                  ? permVal.map(String).join(", ")
+                  : typeof permVal === "object" && permVal !== null
+                    ? JSON.stringify(permVal)
+                    : String(permVal);
+            return `<div class="kv"><span class="kv-k" style="font-family:var(--mono);"><span class="badge badge-perm">${escapeHtml(permKey)}</span></span><span class="kv-v">${escapeHtml(valText)}</span></div>`;
+          })
+          .join("");
+
+  const securityPanelHtml = `
+    <div class="badges" style="margin-bottom:10px;">
+      ${
+        isVerified
+          ? `<span class="badge badge-verified">&#10003; Verified by capdux.org</span>`
+          : `<span class="badge badge-warn">Unverified / Pending Scan</span>`
+      }
+      <span class="badge">Ed25519</span>
+    </div>
+    <div class="kv">
+      <span class="kv-k">Status</span>
+      <span class="kv-v">${escapeHtml(securityStatus || (isVerified ? "verified" : "pending"))}</span>
+    </div>
+    <div class="kv">
+      <span class="kv-k">Signing Key ID</span>
+      <span class="kv-v">${escapeHtml(signingKeyId || "capdux-ed25519-v1")}</span>
+    </div>
+    <div class="kv">
+      <span class="kv-k">Platform Sig</span>
+      <span class="kv-v" title="${escapeHtml(platformSig || "Not signed")}">
+        ${escapeHtml(shortSignature(platformSig))}
+        ${platformSig ? `<button class="copy-btn" type="button" style="margin-left:6px;padding:2px 6px;font-size:0.7rem;" data-copy="${escapeHtml(platformSig)}">Copy</button>` : ""}
+      </span>
+    </div>
+    <div style="margin-top:12px;">
+      <a class="pill" href="/.well-known/capdux-keys.json" target="_blank" rel="noopener noreferrer">Verify Keys (/.well-known/capdux-keys.json) &#8599;</a>
+    </div>
+  `;
 
   const prebuiltHtml =
     prebuiltEntries.length === 0
@@ -692,7 +796,7 @@ export async function renderPackagePage(env: Env, pkgName: string): Promise<Resp
             <tbody>
               ${versions
                 .map((v) => {
-                  const fmt = v.archive_format === "tgz" ? ".tgz" : ".tar.zst";
+                  const fmt = formatArchiveExt(v.archive_format);
                   const dlUrl = `${dlOrigin}/${v.r2_key}`;
                   const yankedBadge = v.yanked
                     ? `<span class="badge badge-err" title="${escapeHtml(v.yank_reason || "Yanked")}">YANKED</span>`
@@ -729,6 +833,7 @@ export async function renderPackagePage(env: Env, pkgName: string): Promise<Resp
             <span class="badge badge-ver">v${escapeHtml(pkg.latest_version || latestVer?.version || "0.0.0")}</span>
             <span class="badge badge-lic">${escapeHtml(pkg.license || "MIT")}</span>
             <span class="badge badge-zst">${escapeHtml(latestFmt)}</span>
+            ${isVerified ? `<span class="badge badge-verified">&#10003; Verified by capdux.org</span>` : ""}
             ${dcpContent ? `<span class="badge badge-ai">AI-First .d.cp</span>` : ""}
           </div>
           <p class="muted" style="margin:0 0 12px;max-width:700px;">${escapeHtml(pkg.description || "Official CP package.")}</p>
@@ -805,6 +910,21 @@ export async function renderPackagePage(env: Env, pkgName: string): Promise<Resp
 
           <section class="panel">
             <div class="panel-head">
+              <h2 class="panel-title">Security &amp; Attestation</h2>
+            </div>
+            ${securityPanelHtml}
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <h2 class="panel-title">Declared Permissions</h2>
+              <span class="badge">${escapeHtml(String(permissionEntries.length))}</span>
+            </div>
+            ${permissionsHtml}
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
               <h2 class="panel-title">Prebuilt Matrix</h2>
             </div>
             ${prebuiltHtml}
@@ -832,4 +952,499 @@ export async function renderPackagePage(env: Env, pkgName: string): Promise<Resp
   });
 
   return htmlResponse(html, 200);
+}
+
+export async function renderAuthPage(env: Env, mode: "login" | "register"): Promise<Response> {
+  const isRegister = mode === "register";
+  const titleText = isRegister ? "Create Developer Account" : "Sign In to capdux.org";
+  const subText = isRegister
+    ? "Register to publish .cap packages, manage Ed25519-signed releases, and mint API tokens."
+    : "Authenticate with your capdux.org developer credentials to access your token dashboard.";
+
+  const body = `
+    <section class="auth-wrap">
+      <div class="auth-card">
+        <div class="badges" style="margin-bottom:12px;">
+          <span class="badge badge-ver">CAPDUX AUTH</span>
+          <span class="badge badge-zst">PBKDF2-SHA256</span>
+        </div>
+        <h1 class="auth-title">${escapeHtml(titleText)}</h1>
+        <p class="muted" style="margin:0 0 20px;font-size:0.88rem;">${escapeHtml(subText)}</p>
+
+        <div id="auth-err" class="alert-err" role="alert"></div>
+        <div id="auth-ok" class="alert-ok" role="status"></div>
+
+        <form id="auth-form" autocomplete="on">
+          <div class="form-group">
+            <label class="form-label" for="username">${isRegister ? "Username" : "Username or Email"}</label>
+            <input class="form-input" id="username" name="username" type="text" required autocomplete="username" placeholder="${isRegister ? "alice" : "alice or alice@example.com"}">
+          </div>
+          ${
+            isRegister
+              ? `<div class="form-group">
+                  <label class="form-label" for="email">Email</label>
+                  <input class="form-input" id="email" name="email" type="email" required autocomplete="email" placeholder="alice@example.com">
+                </div>`
+              : ""
+          }
+          <div class="form-group">
+            <label class="form-label" for="password">Password${isRegister ? " (min 8 chars)" : ""}</label>
+            <input class="form-input" id="password" name="password" type="password" required minlength="${isRegister ? "8" : "1"}" autocomplete="${isRegister ? "new-password" : "current-password"}" placeholder="••••••••">
+          </div>
+          <button id="auth-submit" class="btn" type="submit" style="width:100%;margin-top:6px;padding:10px 14px;">
+            ${isRegister ? "Create Account &amp; Mint Token" : "Sign In"}
+          </button>
+        </form>
+
+        <div style="margin-top:18px;padding-top:14px;border-top:1px solid var(--border);font-size:0.84rem;color:var(--muted);display:flex;justify-content:space-between;align-items:center;gap:10px;">
+          <span>${isRegister ? "Already have an account?" : "New to capdux.org?"}</span>
+          <a href="${isRegister ? "/login" : "/register"}">${isRegister ? "Sign In →" : "Register →"}</a>
+        </div>
+      </div>
+    </section>
+    <script>
+    (function(){
+      var form = document.getElementById('auth-form');
+      var errEl = document.getElementById('auth-err');
+      var okEl = document.getElementById('auth-ok');
+      var btn = document.getElementById('auth-submit');
+      var isRegister = ${isRegister ? "true" : "false"};
+
+      function showErr(msg){
+        okEl.style.display = 'none';
+        errEl.textContent = msg;
+        errEl.style.display = 'block';
+      }
+      function showOk(msg){
+        errEl.style.display = 'none';
+        okEl.textContent = msg;
+        okEl.style.display = 'block';
+      }
+
+      form.addEventListener('submit', function(e){
+        e.preventDefault();
+        errEl.style.display = 'none';
+        okEl.style.display = 'none';
+        btn.disabled = true;
+        var origText = btn.textContent;
+        btn.textContent = isRegister ? 'Creating account...' : 'Signing in...';
+
+        var payload = isRegister
+          ? {
+              username: document.getElementById('username').value.trim(),
+              email: document.getElementById('email').value.trim(),
+              password: document.getElementById('password').value
+            }
+          : {
+              username: document.getElementById('username').value.trim(),
+              password: document.getElementById('password').value,
+              token_name: 'web-dashboard'
+            };
+
+        fetch(isRegister ? '/v1/auth/register' : '/v1/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        })
+          .then(function(res){
+            return res.json().catch(function(){ return {}; }).then(function(data){
+              return { ok: res.ok, status: res.status, data: data };
+            });
+          })
+          .then(function(r){
+            if (!r.ok || !r.data.token) {
+              showErr(r.data.error || ('Authentication failed (HTTP ' + r.status + ')'));
+              btn.disabled = false;
+              btn.textContent = origText;
+              return;
+            }
+            try {
+              localStorage.setItem('capdux_token', r.data.token);
+              if (r.data.user) {
+                localStorage.setItem('capdux_user', JSON.stringify(r.data.user));
+              }
+            } catch(_) {}
+            showOk('Authenticated! Redirecting to developer dashboard...');
+            setTimeout(function(){ window.location.href = '/dashboard'; }, 350);
+          })
+          .catch(function(err){
+            showErr('Network error: ' + (err && err.message ? err.message : String(err)));
+            btn.disabled = false;
+            btn.textContent = origText;
+          });
+      });
+    })();
+    </script>
+  `;
+
+  const html = renderLayout({
+    title: `${isRegister ? "Register" : "Sign In"} — capdux.org`,
+    description: subText,
+    env,
+    activeNav: mode,
+    body,
+  });
+
+  return htmlResponse(html, 200, "no-store");
+}
+
+export async function renderDashboardPage(env: Env): Promise<Response> {
+  const registryOrigin = (env.REGISTRY_ORIGIN || "https://registry.capdux.org").replace(/\/+$/, "");
+
+  const body = `
+    <div class="wrap" style="padding-top:24px;">
+      <section class="pkg-hero">
+        <div>
+          <div class="badges" style="margin-bottom:8px;">
+            <span class="badge badge-ver">DEVELOPER CONSOLE</span>
+            <span class="badge badge-verified">Ed25519 Signed Registry</span>
+          </div>
+          <h1 class="pkg-title" style="margin-bottom:4px;">Token &amp; Publish Dashboard</h1>
+          <p class="muted" style="margin:0;">Manage your <code>capdux_*</code> API tokens, inspect account scopes, and publish <code>.cap</code> archives.</p>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <a class="pill" href="/.well-known/capdux-keys.json" target="_blank" rel="noopener noreferrer">Public Signing Keys &#8599;</a>
+          <button id="btn-signout" class="btn-ghost" type="button" style="display:none;">Sign Out</button>
+        </div>
+      </section>
+
+      <div id="dash-unauth" class="empty" style="display:none;margin-top:24px;">
+        <h2 style="margin:0 0 8px;">Sign In Required</h2>
+        <p class="muted" style="max-width:480px;margin:0 auto 20px;">
+          No active session token found in your browser. Sign in or register to manage your <code>capdux_*</code> API tokens.
+        </p>
+        <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;">
+          <a class="btn" href="/login">Sign In</a>
+          <a class="pill" href="/register">Create Account</a>
+        </div>
+      </div>
+
+      <div id="dash-loading" class="panel" style="margin-top:24px;text-align:center;color:var(--muted);">
+        Loading developer session from <code>/v1/auth/whoami</code>...
+      </div>
+
+      <div id="dash-content" class="dash-grid" style="display:none;">
+        <div>
+          <section class="panel">
+            <div class="panel-head">
+              <h2 class="panel-title">Create New API Token</h2>
+              <span class="badge badge-zst">capdux_*</span>
+            </div>
+            <div id="tok-err" class="alert-err"></div>
+            <div id="tok-secret" class="secret-box">
+              <div style="font-size:0.8rem;color:var(--green);font-weight:700;margin-bottom:6px;">
+                &#10003; New Token Created — Copy it now (it will not be shown again)
+              </div>
+              <div class="cmd-box">
+                <code id="tok-secret-val"></code>
+                <button id="tok-secret-copy" class="copy-btn" type="button" data-copy="">Copy Token</button>
+              </div>
+            </div>
+            <form id="create-token-form" style="display:grid;grid-template-columns:1fr 140px 130px auto;gap:10px;align-items:end;">
+              <div>
+                <label class="form-label" for="tok-name">Token Name</label>
+                <input class="form-input" id="tok-name" type="text" placeholder="ci-release" required>
+              </div>
+              <div>
+                <label class="form-label" for="tok-scope">Scope</label>
+                <select class="form-select" id="tok-scope">
+                  <option value="publish">publish</option>
+                  <option value="read">read</option>
+                </select>
+              </div>
+              <div>
+                <label class="form-label" for="tok-days">Expires (days)</label>
+                <input class="form-input" id="tok-days" type="number" min="1" max="3650" placeholder="90">
+              </div>
+              <div>
+                <button id="tok-create-btn" class="btn" type="submit" style="height:39px;">Create Token</button>
+              </div>
+            </form>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <h2 class="panel-title">Your API Tokens</h2>
+              <span id="tok-count" class="badge">0</span>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>ID</th>
+                    <th>Name</th>
+                    <th>Scope</th>
+                    <th>Created</th>
+                    <th>Last Used</th>
+                    <th>Status</th>
+                    <th>Action</th>
+                  </tr>
+                </thead>
+                <tbody id="tok-tbody"></tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+
+        <aside>
+          <section class="panel">
+            <div class="panel-head">
+              <h2 class="panel-title">Account Profile</h2>
+              <span id="user-role-badge" class="badge badge-ver">user</span>
+            </div>
+            <div class="kv"><span class="kv-k">Username</span><span class="kv-v" id="user-name">—</span></div>
+            <div class="kv"><span class="kv-k">Email</span><span class="kv-v" id="user-email">—</span></div>
+            <div class="kv"><span class="kv-k">Session Scope</span><span class="kv-v" id="user-scope">—</span></div>
+            <div class="kv"><span class="kv-k">Registry</span><span class="kv-v">${escapeHtml(registryOrigin)}</span></div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <h2 class="panel-title">CLI Publish Guide</h2>
+              <span class="badge badge-ai">.cap</span>
+            </div>
+            <p class="muted" style="font-size:0.83rem;margin:0 0 10px;">
+              1. Pack your CP package into a Zstd-compressed <code>.cap</code> archive:
+            </p>
+            <div class="cmd-box" style="margin-bottom:12px;">
+              <code>$ cap pack</code>
+              <button class="copy-btn" type="button" data-copy="cap pack">Copy</button>
+            </div>
+            <p class="muted" style="font-size:0.83rem;margin:0 0 10px;">
+              2. Export your <code>capdux_*</code> token and publish to capdux.org:
+            </p>
+            <div class="cmd-box" style="margin-bottom:12px;">
+              <code>$ CAPDUX_TOKEN=capdux_xxx cap publish</code>
+              <button class="copy-btn" type="button" data-copy="CAPDUX_TOKEN=capdux_xxx cap publish">Copy</button>
+            </div>
+            <p class="muted" style="font-size:0.83rem;margin:0 0 10px;">
+              3. Test installing a local <code>.cap</code> archive offline:
+            </p>
+            <div class="cmd-box">
+              <code>$ cap add ./my-pkg-1.0.0.cap</code>
+              <button class="copy-btn" type="button" data-copy="cap add ./my-pkg-1.0.0.cap">Copy</button>
+            </div>
+          </section>
+        </aside>
+      </div>
+    </div>
+    <script>
+    (function(){
+      var token = '';
+      try { token = localStorage.getItem('capdux_token') || ''; } catch(_) {}
+
+      var loadingEl = document.getElementById('dash-loading');
+      var unauthEl = document.getElementById('dash-unauth');
+      var contentEl = document.getElementById('dash-content');
+      var signoutBtn = document.getElementById('btn-signout');
+      var tokTbody = document.getElementById('tok-tbody');
+      var tokCount = document.getElementById('tok-count');
+      var tokErr = document.getElementById('tok-err');
+      var tokSecret = document.getElementById('tok-secret');
+      var tokSecretVal = document.getElementById('tok-secret-val');
+      var tokSecretCopy = document.getElementById('tok-secret-copy');
+      var scopeSelect = document.getElementById('tok-scope');
+
+      function showUnauth(){
+        loadingEl.style.display = 'none';
+        contentEl.style.display = 'none';
+        signoutBtn.style.display = 'none';
+        unauthEl.style.display = 'block';
+      }
+
+      function authHeaders(){
+        return { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' };
+      }
+
+      signoutBtn.addEventListener('click', function(){
+        try {
+          localStorage.removeItem('capdux_token');
+          localStorage.removeItem('capdux_user');
+        } catch(_) {}
+        window.location.href = '/login';
+      });
+
+      function fmtDate(iso){
+        if (!iso) return '—';
+        return String(iso).slice(0, 10);
+      }
+
+      function renderTokens(tokens){
+        tokCount.textContent = String(tokens.length);
+        tokTbody.textContent = '';
+        if (!tokens.length) {
+          var emptyTr = document.createElement('tr');
+          var emptyTd = document.createElement('td');
+          emptyTd.colSpan = 7;
+          emptyTd.className = 'muted';
+          emptyTd.textContent = 'No tokens created yet.';
+          emptyTr.appendChild(emptyTd);
+          tokTbody.appendChild(emptyTr);
+          return;
+        }
+        tokens.forEach(function(t){
+          var tr = document.createElement('tr');
+          var cells = [
+            '#' + t.id,
+            t.name || '—',
+            t.scope || 'publish',
+            fmtDate(t.created_at),
+            fmtDate(t.last_used_at)
+          ];
+          cells.forEach(function(val){
+            var td = document.createElement('td');
+            td.textContent = val;
+            tr.appendChild(td);
+          });
+
+          var statusTd = document.createElement('td');
+          var badge = document.createElement('span');
+          if (t.revoked) {
+            badge.className = 'badge badge-err';
+            badge.textContent = 'revoked';
+          } else {
+            badge.className = 'badge badge-zst';
+            badge.textContent = 'active';
+          }
+          statusTd.appendChild(badge);
+          tr.appendChild(statusTd);
+
+          var actTd = document.createElement('td');
+          if (!t.revoked) {
+            var revBtn = document.createElement('button');
+            revBtn.type = 'button';
+            revBtn.className = 'btn-danger';
+            revBtn.textContent = 'Revoke';
+            revBtn.addEventListener('click', function(){
+              revBtn.disabled = true;
+              revBtn.textContent = '...';
+              fetch('/v1/auth/tokens/' + encodeURIComponent(String(t.id)), {
+                method: 'DELETE',
+                headers: { 'Authorization': 'Bearer ' + token }
+              })
+                .then(function(res){
+                  if (!res.ok) throw new Error('HTTP ' + res.status);
+                  return loadTokens();
+                })
+                .catch(function(err){
+                  tokErr.textContent = 'Failed to revoke token: ' + err.message;
+                  tokErr.style.display = 'block';
+                  revBtn.disabled = false;
+                  revBtn.textContent = 'Revoke';
+                });
+            });
+            actTd.appendChild(revBtn);
+          } else {
+            actTd.textContent = '—';
+          }
+          tr.appendChild(actTd);
+          tokTbody.appendChild(tr);
+        });
+      }
+
+      function loadTokens(){
+        return fetch('/v1/auth/tokens', { headers: { 'Authorization': 'Bearer ' + token } })
+          .then(function(res){
+            if (res.status === 401) { showUnauth(); return null; }
+            return res.json();
+          })
+          .then(function(data){
+            if (data && Array.isArray(data.tokens)) {
+              renderTokens(data.tokens);
+            }
+          });
+      }
+
+      document.getElementById('create-token-form').addEventListener('submit', function(e){
+        e.preventDefault();
+        tokErr.style.display = 'none';
+        var nameInput = document.getElementById('tok-name');
+        var daysInput = document.getElementById('tok-days');
+        var createBtn = document.getElementById('tok-create-btn');
+        var payload = {
+          name: nameInput.value.trim(),
+          scope: scopeSelect.value
+        };
+        if (daysInput.value.trim()) {
+          payload.expires_in_days = Number(daysInput.value.trim());
+        }
+        createBtn.disabled = true;
+        createBtn.textContent = 'Creating...';
+
+        fetch('/v1/auth/tokens', {
+          method: 'POST',
+          headers: authHeaders(),
+          body: JSON.stringify(payload)
+        })
+          .then(function(res){
+            return res.json().catch(function(){ return {}; }).then(function(data){
+              return { ok: res.ok, status: res.status, data: data };
+            });
+          })
+          .then(function(r){
+            createBtn.disabled = false;
+            createBtn.textContent = 'Create Token';
+            if (!r.ok || !r.data.token) {
+              tokErr.textContent = r.data.error || ('Failed to create token (HTTP ' + r.status + ')');
+              tokErr.style.display = 'block';
+              return;
+            }
+            tokSecretVal.textContent = r.data.token;
+            tokSecretCopy.setAttribute('data-copy', r.data.token);
+            tokSecret.style.display = 'block';
+            nameInput.value = '';
+            daysInput.value = '';
+            loadTokens();
+          })
+          .catch(function(err){
+            createBtn.disabled = false;
+            createBtn.textContent = 'Create Token';
+            tokErr.textContent = 'Network error: ' + err.message;
+            tokErr.style.display = 'block';
+          });
+      });
+
+      if (!token) {
+        showUnauth();
+        return;
+      }
+
+      fetch('/v1/auth/whoami', { headers: { 'Authorization': 'Bearer ' + token } })
+        .then(function(res){
+          if (!res.ok) { showUnauth(); return null; }
+          return res.json();
+        })
+        .then(function(user){
+          if (!user) return;
+          document.getElementById('user-name').textContent = user.username || '—';
+          document.getElementById('user-email').textContent = user.email || '—';
+          document.getElementById('user-scope').textContent = user.tokenScope || '—';
+          document.getElementById('user-role-badge').textContent = user.role || 'user';
+          if (user.role === 'admin') {
+            var opt = document.createElement('option');
+            opt.value = 'admin';
+            opt.textContent = 'admin';
+            scopeSelect.appendChild(opt);
+          }
+          loadingEl.style.display = 'none';
+          signoutBtn.style.display = 'inline-flex';
+          contentEl.style.display = 'grid';
+          return loadTokens();
+        })
+        .catch(function(){
+          showUnauth();
+        });
+    })();
+    </script>
+  `;
+
+  const html = renderLayout({
+    title: "Developer Dashboard — capdux.org",
+    description: "Manage your capdux.org API tokens and publish .cap packages",
+    env,
+    activeNav: "dashboard",
+    body,
+  });
+
+  return htmlResponse(html, 200, "no-store");
 }

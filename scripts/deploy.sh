@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One-click Cloudflare deployment script for capdux.org (Workers + D1 + R2)
+# One-click Cloudflare deployment script for capdux.org (Workers + D1 + R2 + Ed25519 Signing)
 # Usage:
 #   export CLOUDFLARE_API_TOKEN="your_api_token"
 #   export CLOUDFLARE_ACCOUNT_ID="your_account_id"
@@ -21,7 +21,7 @@ fi
 
 WRANGLER="npx --yes wrangler@latest"
 
-echo "[1/5] Ensuring Cloudflare D1 database 'capdux-db' exists..."
+echo "[1/6] Ensuring Cloudflare D1 database 'capdux-db' exists..."
 DB_LIST=$($WRANGLER d1 list --json 2>/dev/null || echo "[]")
 DB_ID=$(printf '%s' "$DB_LIST" | node -e '
   const fs = require("fs");
@@ -41,32 +41,47 @@ if [[ -z "$DB_ID" ]]; then
   exit 1
 fi
 echo "  -> D1 capdux-db ID: $DB_ID"
-
-# Patch database_id into wrangler.toml idempotently
 sed -i "s/database_id = \".*\"/database_id = \"${DB_ID}\"/" wrangler.toml
 
-echo "[2/5] Ensuring Cloudflare R2 bucket 'capdux-packages' exists..."
+echo "[2/6] Ensuring Cloudflare R2 bucket 'capdux-packages' exists..."
 if ! $WRANGLER r2 bucket list 2>/dev/null | grep -q "capdux-packages"; then
   $WRANGLER r2 bucket create capdux-packages
 fi
 echo "  -> R2 bucket 'capdux-packages' ready."
 
-echo "[3/5] Applying remote D1 migrations..."
+echo "[3/6] Applying remote D1 migrations (0001 + 0002)..."
 $WRANGLER d1 migrations apply capdux-db --remote
 
+echo "[4/6] Configuring Ed25519 platform signing keypair..."
+if [[ -z "${CAPDUX_SIGNING_PRIVATE_KEY:-}" || -z "${CAPDUX_SIGNING_PUBLIC_KEY:-}" ]]; then
+  KEYS_JSON=$(node -e '
+    const crypto = require("crypto");
+    const { privateKey, publicKey } = crypto.generateKeyPairSync("ed25519");
+    const priv = privateKey.export({ type: "pkcs8", format: "der" }).toString("base64");
+    const pub = publicKey.export({ type: "spki", format: "der" }).toString("base64");
+    process.stdout.write(JSON.stringify({ priv, pub }));
+  ')
+  CAPDUX_SIGNING_PRIVATE_KEY=$(printf '%s' "$KEYS_JSON" | node -e 'const d=JSON.parse(require("fs").readFileSync(0,"utf8"));process.stdout.write(d.priv);')
+  CAPDUX_SIGNING_PUBLIC_KEY=$(printf '%s' "$KEYS_JSON" | node -e 'const d=JSON.parse(require("fs").readFileSync(0,"utf8"));process.stdout.write(d.pub);')
+  echo "  -> Generated fresh Ed25519 signing keypair (public SPKI saved to /.well-known/capdux-keys.json)."
+fi
+printf '%s' "$CAPDUX_SIGNING_PRIVATE_KEY" | $WRANGLER secret put CAPDUX_SIGNING_PRIVATE_KEY
+printf '%s' "$CAPDUX_SIGNING_PUBLIC_KEY" | $WRANGLER secret put CAPDUX_SIGNING_PUBLIC_KEY
+
 if [[ -n "${CAPDUX_ADMIN_BOOTSTRAP_KEY:-}" ]]; then
-  echo "[4/5] Configuring ADMIN_BOOTSTRAP_KEY secret..."
+  echo "[5/6] Configuring ADMIN_BOOTSTRAP_KEY secret..."
   printf '%s' "$CAPDUX_ADMIN_BOOTSTRAP_KEY" | $WRANGLER secret put ADMIN_BOOTSTRAP_KEY
 else
-  echo "[4/5] Skipping ADMIN_BOOTSTRAP_KEY secret (set CAPDUX_ADMIN_BOOTSTRAP_KEY to enable bot seeding)."
+  echo "[5/6] Skipping ADMIN_BOOTSTRAP_KEY secret (optional)."
 fi
 
-echo "[5/5] Deploying capdux-registry Worker to Cloudflare (capdux.org / registry.capdux.org / index.capdux.org / dl.capdux.org)..."
+echo "[6/6] Deploying capdux-registry Worker to Cloudflare..."
 $WRANGLER deploy
 
 echo ""
 echo "[CAPDUX_DEPLOY_OK] https://capdux.org is live!"
-echo "  - Web Portal:    https://capdux.org"
+echo "  - Web Portal:    https://capdux.org (Login: /login, Register: /register, Tokens: /dashboard)"
 echo "  - Registry API:  https://registry.capdux.org/health"
+echo "  - Public Keys:   https://capdux.org/.well-known/capdux-keys.json"
 echo "  - Sparse Index:  https://index.capdux.org/index/@cap/lru.json"
 echo "  - Zero-Egress:   https://dl.capdux.org"

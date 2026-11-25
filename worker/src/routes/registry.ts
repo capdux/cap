@@ -1,5 +1,6 @@
 // Core Registry API routes: package metadata, Sparse Index, publish, yank/unyank, R2 download
 import { authenticateRequest, canPublishPackage } from "../auth";
+import { runSecurityScan, signPackageAttestation } from "../signing";
 import {
   archiveR2Key,
   computeSha256Integrity,
@@ -125,6 +126,10 @@ export async function handleGetPackage(env: Env, rawName: string): Promise<Respo
       yanked: Boolean(v.yanked),
       yank_reason: v.yank_reason,
       downloads: v.downloads,
+      security_status: v.security_status || "verified",
+      platform_sig: v.platform_sig || "",
+      signing_key_id: v.signing_key_id || "capdux-ed25519-v1",
+      permissions: safeJsonParse<Record<string, unknown>>(v.permissions_json || "{}", {}),
       published_at: v.published_at,
     })),
   });
@@ -291,7 +296,7 @@ export async function handlePublish(req: Request, env: Env): Promise<Response> {
   const format = detectArchiveFormat(archiveBytes);
   if (!format) {
     return json(
-      { error: "Invalid archive magic bytes: expected Zstd (.tar.zst: 28 B5 2F FD) or Gzip (.tgz: 1F 8B)" },
+      { error: "Invalid archive magic bytes: expected Zstd (.cap: 28 B5 2F FD) or Gzip (.tgz: 1F 8B)" },
       400,
     );
   }
@@ -348,9 +353,47 @@ export async function handlePublish(req: Request, env: Env): Promise<Response> {
   if (!readmeMd && typeof metadata.readme === "string") readmeMd = metadata.readme;
   if (!typesDcp && typeof metadata.types_dcp === "string") typesDcp = metadata.types_dcp;
 
+  const permissions =
+    metadata.permissions && typeof metadata.permissions === "object" && !Array.isArray(metadata.permissions)
+      ? metadata.permissions
+      : {};
+
+  // Automated pre-publish security scan
+  const scan = runSecurityScan({
+    archiveFormat: format,
+    archiveSize: archiveBytes.byteLength,
+    unpackedSize,
+    license,
+    manifest: metadata,
+    readmeMd,
+  });
+  if (!scan.passed) {
+    return json(
+      {
+        error: "Package failed automated pre-publish security scan",
+        security_status: scan.status,
+        checks: scan.checks,
+        warnings: scan.warnings,
+        errors: scan.errors,
+        scanned_at: scan.scanned_at,
+      },
+      422,
+    );
+  }
+
+  // Generate platform Ed25519 attestation signature
+  const publishedAt = new Date().toISOString();
+  const attestation = await signPackageAttestation(env, {
+    name: pkgName,
+    version,
+    integrity,
+    securityStatus: scan.status,
+    publishedAt,
+  });
+
   // Upload archive to R2
   const r2Key = archiveR2Key(pkgName, version, format);
-  const archiveContentType = format === "zst" ? "application/zstd" : "application/gzip";
+  const archiveContentType = format === "tgz" ? "application/gzip" : "application/zstd";
   await env.BUCKET.put(r2Key, archiveBytes, {
     httpMetadata: {
       contentType: archiveContentType,
@@ -361,6 +404,9 @@ export async function handlePublish(req: Request, env: Env): Promise<Response> {
       version,
       integrity,
       format,
+      security_status: scan.status,
+      platform_sig: attestation.signature,
+      signing_key_id: attestation.keyId,
     },
   });
 
@@ -407,8 +453,9 @@ export async function handlePublish(req: Request, env: Env): Promise<Response> {
   await env.DB.prepare(
     `INSERT INTO package_versions
      (package_id, version, manifest_json, deps_json, readme_md, types_dcp, archive_format, r2_key,
-      archive_size, unpacked_size, integrity, prebuilt_json, dist_tag, published_by)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      archive_size, unpacked_size, integrity, prebuilt_json, dist_tag, published_by, published_at,
+      security_status, security_report_json, platform_sig, signing_key_id, permissions_json)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   )
     .bind(
       pkg.id,
@@ -425,6 +472,12 @@ export async function handlePublish(req: Request, env: Env): Promise<Response> {
       JSON.stringify(prebuilt),
       distTag,
       user.id,
+      publishedAt,
+      scan.status,
+      JSON.stringify(scan),
+      attestation.signature,
+      attestation.keyId,
+      JSON.stringify(permissions),
     )
     .run();
 
@@ -436,7 +489,14 @@ export async function handlePublish(req: Request, env: Env): Promise<Response> {
       user.id,
       "package.publish",
       `${pkgName}@${version}`,
-      JSON.stringify({ format, size: archiveBytes.byteLength, integrity, r2_key: r2Key }),
+      JSON.stringify({
+        format,
+        size: archiveBytes.byteLength,
+        integrity,
+        r2_key: r2Key,
+        security_status: scan.status,
+        signing_key_id: attestation.keyId,
+      }),
     )
     .run()
     .catch(() => {});
@@ -453,9 +513,13 @@ export async function handlePublish(req: Request, env: Env): Promise<Response> {
       name: pkgName,
       version,
       format,
+      r2_key: r2Key,
       integrity,
       size: archiveBytes.byteLength,
-      r2_key: r2Key,
+      security_status: scan.status,
+      platform_sig: attestation.signature,
+      signing_key_id: attestation.keyId,
+      published_at: publishedAt,
       url: `${dlOrigin}/${r2Key}`,
       index_url: `${indexOrigin}/${pkgName}.json`,
     },
@@ -596,9 +660,22 @@ export async function handleDownload(
   const headers = new Headers();
   const contentType =
     obj.httpMetadata?.contentType ||
-    (r2Key.endsWith(".zst") ? "application/zstd" : r2Key.endsWith(".tgz") ? "application/gzip" : "application/octet-stream");
+    (r2Key.endsWith(".cap") || r2Key.endsWith(".zst")
+      ? "application/zstd"
+      : r2Key.endsWith(".tgz")
+        ? "application/gzip"
+        : "application/octet-stream");
   headers.set("Content-Type", contentType);
   headers.set("Cache-Control", ARCHIVE_CACHE_CONTROL);
+  if (obj.customMetadata?.integrity) {
+    headers.set("X-Capdux-Integrity", obj.customMetadata.integrity);
+  }
+  if (obj.customMetadata?.platform_sig) {
+    headers.set("X-Capdux-Signature", obj.customMetadata.platform_sig);
+  }
+  if (obj.customMetadata?.signing_key_id) {
+    headers.set("X-Capdux-Signing-Key-Id", obj.customMetadata.signing_key_id);
+  }
   if (obj.httpEtag) {
     headers.set("ETag", obj.httpEtag);
   } else if (obj.etag) {

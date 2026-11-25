@@ -132,9 +132,14 @@ function discoverOfficialPackages(cpRepo: string): DiscoveredPackage[] {
   return found;
 }
 
-function findZstFileInDir(dir: string): string | null {
+function findArchiveFileInDir(dir: string): string | null {
   try {
     const files = readdirSync(dir);
+    for (const f of files) {
+      if (f.endsWith(".cap")) {
+        return join(dir, f);
+      }
+    }
     for (const f of files) {
       if (f.endsWith(".tar.zst")) {
         return join(dir, f);
@@ -147,7 +152,7 @@ function findZstFileInDir(dir: string): string | null {
 async function packPackage(pkg: DiscoveredPackage, workDir: string): Promise<{ archivePath: string; usedFallback: boolean }> {
   const safeBase = pkg.name.replace(/^@/, "").replace(/\//g, "-");
   const outDir = join(workDir, `${safeBase}-${pkg.version}`);
-  const fallbackArchive = join(workDir, `${safeBase}-${pkg.version}.tar.zst`);
+  const fallbackArchive = join(workDir, `${safeBase}-${pkg.version}.cap`);
 
   // 1. Primary path: `cap pack --out <tmp>`
   try {
@@ -158,7 +163,7 @@ async function packPackage(pkg: DiscoveredPackage, workDir: string): Promise<{ a
     });
     const exitCode = await proc.exited;
     if (exitCode === 0) {
-      const produced = findZstFileInDir(outDir);
+      const produced = findArchiveFileInDir(outDir);
       if (produced && existsSync(produced)) {
         const bytes = new Uint8Array(readFileSync(produced));
         if (isZstdArchive(bytes)) {
@@ -222,7 +227,7 @@ async function publishPackage(
   typesDcp: string,
 ): Promise<"published" | "skipped"> {
   const safeBase = pkg.name.replace(/^@/, "").replace(/\//g, "-");
-  const filename = `${safeBase}-${pkg.version}.tar.zst`;
+  const filename = `${safeBase}-${pkg.version}.cap`;
 
   const metadata = {
     name: pkg.name,
@@ -346,7 +351,7 @@ async function main() {
 
         if (DRY_RUN) {
           console.log(
-            `${prefix} — OK (${formatBytes(archiveBytes.byteLength)} zst, ${formatBytes(unpackedSize)} raw, ` +
+            `${prefix} — OK (${formatBytes(archiveBytes.byteLength)} .cap, ${formatBytes(unpackedSize)} raw, ` +
               `${integrity.slice(0, 23)}…, dcp=${typesDcp.length}B${usedFallback ? ", tar-fallback" : ""})`,
           );
           published++;

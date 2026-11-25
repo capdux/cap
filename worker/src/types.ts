@@ -9,6 +9,11 @@ export interface Env {
   WEB_ORIGIN: string;
   MAX_TARBALL_BYTES: string;
   ADMIN_BOOTSTRAP_KEY?: string;
+  /** Optional base64-encoded PKCS8 Ed25519 private key stored as Cloudflare Worker Secret. */
+  CAPDUX_SIGNING_PRIVATE_KEY?: string;
+  /** Optional base64-encoded SPKI Ed25519 public key matching CAPDUX_SIGNING_PRIVATE_KEY. */
+  CAPDUX_SIGNING_PUBLIC_KEY?: string;
+  CAPDUX_SIGNING_KEY_ID?: string;
 }
 
 export interface AuthUser {
@@ -45,7 +50,7 @@ export interface VersionRow {
   deps_json: string;
   readme_md: string;
   types_dcp: string;
-  archive_format: "zst" | "tgz";
+  archive_format: "cap" | "zst" | "tgz";
   r2_key: string;
   archive_size: number;
   unpacked_size: number;
@@ -57,16 +62,39 @@ export interface VersionRow {
   downloads: number;
   published_by: number;
   published_at: string;
+  security_status?: string;
+  security_report_json?: string;
+  platform_sig?: string;
+  signing_key_id?: string;
+  permissions_json?: string;
+}
+
+export interface SecurityScanReport {
+  passed: boolean;
+  status: "verified" | "rejected";
+  checks: {
+    archive_magic: boolean;
+    compression_ratio_ok: boolean;
+    license_compliant: boolean;
+    no_suspicious_hooks: boolean;
+  };
+  warnings: string[];
+  errors: string[];
+  scanned_at: string;
 }
 
 export interface SparseIndexVersion {
   ver: string;
   deps: Record<string, string>;
-  format: "zst" | "tgz";
+  format: "cap" | "zst" | "tgz";
   integrity: string;
   size: number;
   unpacked_size: number;
   url: string;
+  security_status: string;
+  platform_sig: string;
+  signing_key_id: string;
+  permissions?: Record<string, unknown>;
   prebuilt?: Record<string, { url: string; integrity: string; size: number }>;
   yanked?: boolean;
   published_at: string;

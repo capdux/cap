@@ -15,6 +15,7 @@ import {
   handleStats,
   handleSyncRegistry,
 } from "./routes/search";
+import { getWellKnownKeysDoc } from "./signing";
 import type { Env } from "./types";
 
 const CORS_HEADERS: Record<string, string> = {
@@ -76,6 +77,8 @@ function matchYankRoute(pathname: string): { name: string; version: string; yank
 type WebModule = {
   renderHomePage: (env: Env, url: URL) => Promise<Response>;
   renderPackagePage: (env: Env, pkgName: string) => Promise<Response>;
+  renderAuthPage?: (env: Env, mode: "login" | "register") => Promise<Response>;
+  renderDashboardPage?: (env: Env) => Promise<Response>;
 };
 
 async function loadWebModule(): Promise<WebModule | null> {
@@ -110,6 +113,20 @@ export default {
               headers: { "Content-Type": "application/json; charset=utf-8" },
             },
           ),
+        );
+      }
+
+      // Platform Ed25519 public signing keys discovery
+      if (pathname === "/.well-known/capdux-keys.json" && request.method === "GET") {
+        const keysDoc = await getWellKnownKeysDoc(env);
+        return withCors(
+          new Response(JSON.stringify(keysDoc), {
+            status: 200,
+            headers: {
+              "Content-Type": "application/json; charset=utf-8",
+              "Cache-Control": "public, max-age=3600",
+            },
+          }),
         );
       }
 
@@ -185,6 +202,20 @@ export default {
         if (pathname === "/" || pathname === "/search") {
           const web = await loadWebModule();
           if (web) return await web.renderHomePage(env, url);
+          return jsonError("Web UI module not available", 503);
+        }
+        if (pathname === "/login" || pathname === "/register") {
+          const web = await loadWebModule();
+          if (web && typeof web.renderAuthPage === "function") {
+            return await web.renderAuthPage(env, pathname === "/register" ? "register" : "login");
+          }
+          return jsonError("Web UI module not available", 503);
+        }
+        if (pathname === "/dashboard") {
+          const web = await loadWebModule();
+          if (web && typeof web.renderDashboardPage === "function") {
+            return await web.renderDashboardPage(env);
+          }
           return jsonError("Web UI module not available", 503);
         }
         if (pathname.startsWith("/pkg/") || pathname.startsWith("/packages/")) {

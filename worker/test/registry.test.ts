@@ -1,10 +1,11 @@
 // End-to-end unit tests for capdux.org Cloudflare Worker Registry API
-// Uses bun:sqlite (executing migrations/0001_init.sql) as Mock D1 and Map as Mock R2.
+// Uses bun:sqlite (executing migrations/0001_init.sql & 0002_security_and_sig.sql) as Mock D1 and Map as Mock R2.
 import { Database } from "bun:sqlite";
 import { beforeAll, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import worker from "../src/index";
+import { verifyPackageAttestation } from "../src/signing";
 import { computeSha256Integrity } from "../src/storage";
 import type { Env } from "../src/types";
 
@@ -54,10 +55,13 @@ class MockD1Statement {
 class MockD1Database {
   public readonly sqlite: Database;
 
-  constructor(schemaSql: string) {
+  constructor(schemaSqls: string | string[]) {
     this.sqlite = new Database(":memory:");
     this.sqlite.exec("PRAGMA foreign_keys = ON;");
-    this.sqlite.exec(schemaSql);
+    const list = Array.isArray(schemaSqls) ? schemaSqls : [schemaSqls];
+    for (const sql of list) {
+      this.sqlite.exec(sql);
+    }
   }
 
   prepare(query: string): MockD1Statement {
@@ -205,11 +209,14 @@ describe("capdux.org Cloudflare Worker Registry API", () => {
   let userToken = "";
   let publishedR2Key = "";
   let publishedBytes: Uint8Array;
+  let publishedIntegrity = "";
+  let publishedPlatformSig = "";
+  let publishedAt = "";
 
   beforeAll(() => {
-    const schemaPath = resolve(import.meta.dir, "../../migrations/0001_init.sql");
-    const schemaSql = readFileSync(schemaPath, "utf8");
-    db = new MockD1Database(schemaSql);
+    const initSql = readFileSync(resolve(import.meta.dir, "../../migrations/0001_init.sql"), "utf8");
+    const sigSql = readFileSync(resolve(import.meta.dir, "../../migrations/0002_security_and_sig.sql"), "utf8");
+    db = new MockD1Database([initSql, sigSql]);
     bucket = new MockR2Bucket();
     ctx = new MockExecutionContext();
     env = {
@@ -343,7 +350,7 @@ describe("capdux.org Cloudflare Worker Registry API", () => {
     expect(checkRevoked.status).toBe(401);
   });
 
-  test("Publish valid .tar.zst (28 B5 2F FD) via multipart/form-data & fetch package metadata", async () => {
+  test("Publish valid .cap (Zstd 28 B5 2F FD) via multipart/form-data, verify security & Ed25519 signature, & fetch metadata", async () => {
     publishedBytes = makeFakeZstdPayload("lru-cache-v1.0.0-source");
     const integrity = await computeSha256Integrity(publishedBytes);
 
@@ -358,11 +365,12 @@ describe("capdux.org Cloudflare Worker Registry API", () => {
         repository: "https://github.com/cp-lang/cp",
         keywords: ["lru", "cache", "datastructure"],
         dependencies: { "@cap/hash": "^1.0.0" },
+        permissions: { fs: "none", net: "none" },
         integrity,
         unpacked_size: 4096,
       }),
     );
-    form.set("archive", new Blob([publishedBytes], { type: "application/zstd" }), "cap-lru-1.0.0.tar.zst");
+    form.set("archive", new Blob([publishedBytes], { type: "application/zstd" }), "cap-lru-1.0.0.cap");
     form.set("readme", "# @cap/lru\nFast LRU cache.");
     form.set("types_dcp", "pub class LruCache<K, V> {}");
 
@@ -376,10 +384,17 @@ describe("capdux.org Cloudflare Worker Registry API", () => {
     expect(pubBody.ok).toBe(true);
     expect(pubBody.name).toBe("@cap/lru");
     expect(pubBody.version).toBe("1.0.0");
-    expect(pubBody.format).toBe("zst");
+    expect(pubBody.format).toBe("cap");
     expect(pubBody.integrity).toBe(integrity);
-    expect(pubBody.r2_key).toBe("pkg/@cap/lru/1.0.0/cap-lru-1.0.0.tar.zst");
+    expect(pubBody.r2_key).toBe("pkg/@cap/lru/1.0.0/cap-lru-1.0.0.cap");
+    expect(pubBody.security_status).toBe("verified");
+    expect(pubBody.platform_sig).toMatch(/^ed25519:[A-Za-z0-9+/=]+$/);
+    expect(pubBody.signing_key_id).toBeTruthy();
+    expect(pubBody.published_at).toBeTruthy();
     publishedR2Key = pubBody.r2_key;
+    publishedIntegrity = pubBody.integrity;
+    publishedPlatformSig = pubBody.platform_sig;
+    publishedAt = pubBody.published_at;
 
     // Fetch package metadata
     const metaRes = await req("/v1/packages/@cap/lru");
@@ -389,9 +404,129 @@ describe("capdux.org Cloudflare Worker Registry API", () => {
     expect(meta["dist-tags"].latest).toBe("1.0.0");
     expect(meta.versions.length).toBe(1);
     expect(meta.versions[0].version).toBe("1.0.0");
-    expect(meta.versions[0].format).toBe("zst");
+    expect(meta.versions[0].format).toBe("cap");
+    expect(meta.versions[0].security_status).toBe("verified");
+    expect(meta.versions[0].platform_sig).toBe(publishedPlatformSig);
+    expect(meta.versions[0].permissions).toEqual({ fs: "none", net: "none" });
     expect(meta.versions[0].readme_md).toContain("Fast LRU cache");
     expect(meta.versions[0].types_dcp).toContain("LruCache");
+  });
+
+  test("GET /.well-known/capdux-keys.json & offline Ed25519 attestation verification (valid & tampered)", async () => {
+    const keysRes = await req("/.well-known/capdux-keys.json");
+    expect(keysRes.status).toBe(200);
+    expect(keysRes.headers.get("Cache-Control")).toBe("public, max-age=3600");
+    const keysDoc = (await keysRes.json()) as any;
+    expect(keysDoc.algorithm).toBe("Ed25519");
+    expect(Array.isArray(keysDoc.keys)).toBe(true);
+    expect(keysDoc.keys.length).toBeGreaterThan(0);
+
+    const pubKeySpki = keysDoc.keys[0].public_key_spki_base64 as string;
+    expect(pubKeySpki).toBeTruthy();
+
+    // Verify authentic attestation returns true
+    const valid = await verifyPackageAttestation(pubKeySpki, publishedPlatformSig, {
+      name: "@cap/lru",
+      version: "1.0.0",
+      integrity: publishedIntegrity,
+      securityStatus: "verified",
+      publishedAt,
+    });
+    expect(valid).toBe(true);
+
+    // Tampering any field must fail offline verification
+    const tamperedIntegrity = await verifyPackageAttestation(pubKeySpki, publishedPlatformSig, {
+      name: "@cap/lru",
+      version: "1.0.0",
+      integrity: "sha256-ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      securityStatus: "verified",
+      publishedAt,
+    });
+    expect(tamperedIntegrity).toBe(false);
+
+    const tamperedVersion = await verifyPackageAttestation(pubKeySpki, publishedPlatformSig, {
+      name: "@cap/lru",
+      version: "1.0.1",
+      integrity: publishedIntegrity,
+      securityStatus: "verified",
+      publishedAt,
+    });
+    expect(tamperedVersion).toBe(false);
+
+    const tamperedStatus = await verifyPackageAttestation(pubKeySpki, publishedPlatformSig, {
+      name: "@cap/lru",
+      version: "1.0.0",
+      integrity: publishedIntegrity,
+      securityStatus: "rejected",
+      publishedAt,
+    });
+    expect(tamperedStatus).toBe(false);
+  });
+
+  test("Security scan rejects non-permissive license (GPL-3.0) and install hooks (scripts.postinstall) with 422, and unauthenticated publish returns 401", async () => {
+    const validCap = makeFakeZstdPayload("security-scan-test");
+
+    // 1. Unauthenticated PUT /v1/publish -> 401
+    const unauthRes = await req("/v1/publish", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: "anon-pkg",
+        version: "0.1.0",
+        license: "MIT",
+        archive_base64: toBase64(validCap),
+      }),
+    });
+    expect(unauthRes.status).toBe(401);
+
+    // 2. Non-permissive license GPL-3.0 -> 422
+    const gplRes = await req("/v1/publish", {
+      method: "PUT",
+      headers: {
+        Authorization: `Bearer ${userToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        name: "gpl-blocked-pkg",
+        version: "0.1.0",
+        license: "GPL-3.0",
+        archive_base64: toBase64(validCap),
+      }),
+    });
+    expect(gplRes.status).toBe(422);
+    const gplBody = (await gplRes.json()) as any;
+    expect(gplBody.security_status).toBe("rejected");
+    expect(Array.isArray(gplBody.errors)).toBe(true);
+    expect(gplBody.errors.some((e: string) => e.includes("GPL-3.0"))).toBe(true);
+
+    // 3. Disallowed lifecycle hook scripts.postinstall -> 422
+    const hookRes = await req("/v1/publish", {
+      method: "PUT",
+      headers: {
+        Authorization: `Bearer ${userToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        name: "hook-blocked-pkg",
+        version: "0.1.0",
+        license: "MIT",
+        scripts: {
+          postinstall: "sh -c 'echo suspicious'",
+        },
+        archive_base64: toBase64(validCap),
+      }),
+    });
+    expect(hookRes.status).toBe(422);
+    const hookBody = (await hookRes.json()) as any;
+    expect(hookBody.security_status).toBe("rejected");
+    expect(Array.isArray(hookBody.errors)).toBe(true);
+    expect(hookBody.errors.some((e: string) => e.includes("scripts.postinstall"))).toBe(true);
+
+    // Ensure rejected packages were NOT persisted to D1
+    const checkGpl = await req("/v1/packages/gpl-blocked-pkg");
+    expect(checkGpl.status).toBe(404);
+    const checkHook = await req("/v1/packages/hook-blocked-pkg");
+    expect(checkHook.status).toBe(404);
   });
 
   test("Publish rejects invalid magic bytes (400), mismatched SRI (400), duplicate version (409), and unauthorized scope (403)", async () => {
@@ -488,7 +623,9 @@ describe("capdux.org Cloudflare Worker Registry API", () => {
     expect(doc1.name).toBe("@cap/lru");
     expect(doc1.latest).toBe("1.0.0");
     expect(doc1.versions.length).toBe(1);
-    expect(doc1.versions[0].format).toBe("zst");
+    expect(doc1.versions[0].format).toBe("cap");
+    expect(doc1.versions[0].security_status).toBe("verified");
+    expect(doc1.versions[0].platform_sig).toBe(publishedPlatformSig);
 
     // 2. Evict from R2 to force D1 fallback -> X-Cache: MISS
     await bucket.delete("index/@cap/lru.json");
@@ -505,11 +642,14 @@ describe("capdux.org Cloudflare Worker Registry API", () => {
     expect(hitAgain.headers.get("X-Cache")).toBe("HIT");
   });
 
-  test("GET /dl/<r2_key> streams archive with immutable cache headers & increments download counts", async () => {
+  test("GET /dl/<r2_key> streams archive anonymously with X-Capdux-Integrity, X-Capdux-Signature & immutable cache headers", async () => {
+    // Anonymous request (no Authorization header)
     const dlRes = await req(`/dl/${publishedR2Key}`);
     expect(dlRes.status).toBe(200);
     expect(dlRes.headers.get("Cache-Control")).toBe("public, max-age=31536000, immutable");
     expect(dlRes.headers.get("ETag")).toBeTruthy();
+    expect(dlRes.headers.get("X-Capdux-Integrity")).toBe(publishedIntegrity);
+    expect(dlRes.headers.get("X-Capdux-Signature")).toBe(publishedPlatformSig);
 
     const received = new Uint8Array(await dlRes.arrayBuffer());
     expect(received).toEqual(publishedBytes);

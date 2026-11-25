@@ -1,17 +1,17 @@
-// R2 storage, archive magic verification (.tar.zst & .tgz), SRI integrity, and Sparse Index writer
+// R2 storage, archive magic verification (.cap Zstd & .tgz), SRI integrity, and Sparse Index writer
 import { sha256Hex } from "./auth";
 import type { Env, PackageRow, SparseIndexDoc, VersionRow } from "./types";
 
-export type ArchiveFormat = "zst" | "tgz";
+export type ArchiveFormat = "cap" | "zst" | "tgz";
 
 /**
  * Inspects archive magic bytes matching `cap/src/project/archive.zig`:
- * - Zstd (.tar.zst): 28 B5 2F FD (preferred high-compression format)
- * - Gzip (.tgz):     1F 8B       (npm-compatible fallback)
+ * - Zstd (`.cap` / `.tar.zst`): 28 B5 2F FD (preferred high-compression format)
+ * - Gzip (`.tgz`):              1F 8B       (npm-compatible fallback)
  */
 export function detectArchiveFormat(bytes: Uint8Array): ArchiveFormat | null {
   if (bytes.length >= 4 && bytes[0] === 0x28 && bytes[1] === 0xb5 && bytes[2] === 0x2f && bytes[3] === 0xfd) {
-    return "zst";
+    return "cap";
   }
   if (bytes.length >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b) {
     return "tgz";
@@ -39,8 +39,13 @@ export function isValidSemver(ver: string): boolean {
   return /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(ver);
 }
 
+/**
+ * Canonical R2 key for stored packages:
+ * - Zstd high-compression archives use unified `.cap` suffix (`pkg/@cap/lru/1.0.0/cap-lru-1.0.0.cap`)
+ * - Legacy npm-compatible gzip archives use `.tgz`
+ */
 export function archiveR2Key(pkgName: string, version: string, format: ArchiveFormat): string {
-  const ext = format === "zst" ? "tar.zst" : "tgz";
+  const ext = format === "tgz" ? "tgz" : "cap";
   const safeBase = pkgName.replace(/^@/, "").replace(/\//g, "-");
   return `pkg/${pkgName}/${version}/${safeBase}-${version}.${ext}`;
 }
@@ -69,7 +74,7 @@ export async function verifyIntegrity(bytes: Uint8Array, expected: string): Prom
 
 /**
  * Rebuilds and writes the static Sparse Index JSON for a package to R2 (`index/<pkg>.json`),
- * enabling 95%+ of `cap install` lookups to hit Cloudflare edge CDN directly with zero DB load.
+ * embedding SHA-256 integrity, security scan status, and capdux.org Ed25519 platform signature.
  */
 export async function syncSparseIndex(env: Env, pkg: PackageRow): Promise<SparseIndexDoc> {
   const { results } = await env.DB.prepare(
@@ -90,6 +95,11 @@ export async function syncSparseIndex(env: Env, pkg: PackageRow): Promise<Sparse
       let deps: Record<string, string> = {};
       try {
         deps = JSON.parse(v.deps_json || "{}");
+      } catch {}
+      let permissions: Record<string, unknown> | undefined;
+      try {
+        const p = JSON.parse(v.permissions_json || "{}");
+        if (p && Object.keys(p).length > 0) permissions = p;
       } catch {}
       let prebuilt: Record<string, { url: string; integrity: string; size: number }> | undefined;
       try {
@@ -113,6 +123,10 @@ export async function syncSparseIndex(env: Env, pkg: PackageRow): Promise<Sparse
         size: v.archive_size,
         unpacked_size: v.unpacked_size,
         url: `${dlOrigin}/${v.r2_key}`,
+        security_status: v.security_status || "verified",
+        platform_sig: v.platform_sig || "",
+        signing_key_id: v.signing_key_id || "capdux-ed25519-v1",
+        ...(permissions ? { permissions } : {}),
         ...(prebuilt ? { prebuilt } : {}),
         ...(v.yanked ? { yanked: true } : {}),
         published_at: v.published_at,
