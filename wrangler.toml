@@ -1,0 +1,35 @@
+# Cloudflare Workers configuration for capdux.org
+# Bindings: D1 (SQLite metadata) + R2 (zero-egress .tar.zst & sparse index storage)
+
+name = "capdux-registry"
+main = "worker/src/index.ts"
+compatibility_date = "2025-05-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Custom domain routes (auto-provisioned TLS on Cloudflare)
+routes = [
+  { pattern = "capdux.org", custom_domain = true },
+  { pattern = "www.capdux.org", custom_domain = true },
+  { pattern = "registry.capdux.org", custom_domain = true },
+  { pattern = "index.capdux.org", custom_domain = true },
+  { pattern = "dl.capdux.org", custom_domain = true }
+]
+
+[vars]
+REGISTRY_ORIGIN = "https://registry.capdux.org"
+DOWNLOAD_ORIGIN = "https://dl.capdux.org"
+INDEX_ORIGIN = "https://index.capdux.org"
+WEB_ORIGIN = "https://capdux.org"
+MAX_TARBALL_BYTES = "52428800" # 50 MiB max single archive
+
+# D1 database (database_id will be populated automatically by scripts/deploy.sh)
+[[d1_databases]]
+binding = "DB"
+database_name = "capdux-db"
+database_id = "REPLACE_WITH_D1_DATABASE_ID"
+migrations_dir = "migrations"
+
+# R2 bucket (zero-egress storage for .tar.zst source archives, prebuilt binaries & sparse index JSON)
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "capdux-packages"
