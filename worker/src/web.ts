@@ -974,18 +974,41 @@ export async function renderAuthPage(env: Env, mode: "login" | "register"): Prom
         <div id="auth-err" class="alert-err" role="alert"></div>
         <div id="auth-ok" class="alert-ok" role="status"></div>
 
+        <form id="auth-form" autocomplete="on">
+          <div class="form-group">
+            <label class="form-label" for="username">${isRegister ? "Username" : "Username or Email"}</label>
+            <input class="form-input" id="username" name="username" type="text" required autocomplete="username" placeholder="${isRegister ? "alice" : "alice or alice@example.com"}">
+          </div>
+          ${
+            isRegister
+              ? `<div class="form-group">
+                  <label class="form-label" for="email">Email</label>
+                  <input class="form-input" id="email" name="email" type="email" required autocomplete="email" placeholder="alice@example.com">
+                </div>`
+              : ""
+          }
+          <div class="form-group">
+            <label class="form-label" for="password">Password${isRegister ? " (min 8 chars)" : ""}</label>
+            <input class="form-input" id="password" name="password" type="password" required minlength="${isRegister ? "8" : "1"}" autocomplete="${isRegister ? "new-password" : "current-password"}" placeholder="••••••••">
+          </div>
+          <button id="auth-submit" class="btn" type="submit" style="width:100%;margin-top:6px;padding:10px 14px;">
+            ${isRegister ? "Create Account &amp; Mint Token" : "Sign In"}
+          </button>
+        </form>
+
+        <div style="text-align:center;font-size:0.78rem;color:var(--muted);margin:16px 0 12px;">— or continue with OAuth (Capdux SSO) —</div>
         <div style="display:flex;gap:6px;margin-bottom:10px;">
           <button type="button" class="btn-secondary" data-cap-tab="global" style="flex:1;padding:6px 8px;font-size:0.8rem;cursor:pointer;border:1px solid var(--accent);border-radius:7px;background:var(--panel);color:var(--fg);">Global (国际)</button>
           <button type="button" class="btn-secondary" data-cap-tab="cn" style="flex:1;padding:6px 8px;font-size:0.8rem;cursor:pointer;border:1px solid var(--border);border-radius:7px;background:transparent;color:var(--muted);">中国区 (China)</button>
         </div>
-        <div id="cap-oauth-global" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px;">
+        <div id="cap-oauth-global" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:4px;">
           <a class="btn-secondary" style="display:inline-flex;align-items:center;justify-content:center;padding:8px 10px;text-decoration:none;border:1px solid var(--border);border-radius:8px;font-size:0.83rem;font-weight:600;color:var(--fg);" href="https://id.capdux.com/sso/oauth/github?redirect=https%3A%2F%2Fcapdux.org%2Fdashboard">GitHub</a>
           <a class="btn-secondary" style="display:inline-flex;align-items:center;justify-content:center;padding:8px 10px;text-decoration:none;border:1px solid var(--border);border-radius:8px;font-size:0.83rem;font-weight:600;color:var(--fg);" href="https://id.capdux.com/sso/oauth/google?redirect=https%3A%2F%2Fcapdux.org%2Fdashboard">Google</a>
           <a class="btn-secondary" style="display:inline-flex;align-items:center;justify-content:center;padding:8px 10px;text-decoration:none;border:1px solid var(--border);border-radius:8px;font-size:0.83rem;font-weight:600;color:var(--fg);" href="https://id.capdux.com/sso/oauth/apple?redirect=https%3A%2F%2Fcapdux.org%2Fdashboard">Apple</a>
           <a class="btn-secondary" style="display:inline-flex;align-items:center;justify-content:center;padding:8px 10px;text-decoration:none;border:1px solid var(--border);border-radius:8px;font-size:0.83rem;font-weight:600;color:var(--fg);" href="https://id.capdux.com/sso/oauth/microsoft?redirect=https%3A%2F%2Fcapdux.org%2Fdashboard">Microsoft</a>
           <a class="btn-secondary" style="grid-column:1 / -1;display:inline-flex;align-items:center;justify-content:center;padding:8px 10px;text-decoration:none;border:1px solid var(--border);border-radius:8px;font-size:0.83rem;font-weight:600;color:var(--fg);" href="https://id.capdux.com/sso/oauth/facebook?redirect=https%3A%2F%2Fcapdux.org%2Fdashboard">Facebook</a>
         </div>
-        <div id="cap-oauth-cn" style="display:none;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px;">
+        <div id="cap-oauth-cn" style="display:none;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:4px;">
           <a class="btn-secondary" style="display:inline-flex;align-items:center;justify-content:center;padding:8px 10px;text-decoration:none;border:1px solid var(--border);border-radius:8px;font-size:0.83rem;font-weight:600;color:var(--fg);" href="https://id.capdux.com/sso/oauth/wechat?redirect=https%3A%2F%2Fcapdux.org%2Fdashboard">微信扫码</a>
           <a class="btn-secondary" style="display:inline-flex;align-items:center;justify-content:center;padding:8px 10px;text-decoration:none;border:1px solid var(--border);border-radius:8px;font-size:0.83rem;font-weight:600;color:var(--fg);" href="https://id.capdux.com/sso/oauth/qq?redirect=https%3A%2F%2Fcapdux.org%2Fdashboard">QQ 登录</a>
           <a class="btn-secondary" style="display:inline-flex;align-items:center;justify-content:center;padding:8px 10px;text-decoration:none;border:1px solid var(--border);border-radius:8px;font-size:0.83rem;font-weight:600;color:var(--fg);" href="https://id.capdux.com/sso/oauth/apple?redirect=https%3A%2F%2Fcapdux.org%2Fdashboard">Apple 账号</a>
@@ -1014,29 +1037,6 @@ export async function renderAuthPage(env: Env, mode: "login" | "register"): Prom
           });
         })();
         </script>
-        <div style="text-align:center;font-size:0.78rem;color:var(--muted);margin-bottom:14px;">— or continue with capdux.org credentials —</div>
-
-        <form id="auth-form" autocomplete="on">
-          <div class="form-group">
-            <label class="form-label" for="username">${isRegister ? "Username" : "Username or Email"}</label>
-            <input class="form-input" id="username" name="username" type="text" required autocomplete="username" placeholder="${isRegister ? "alice" : "alice or alice@example.com"}">
-          </div>
-          ${
-            isRegister
-              ? `<div class="form-group">
-                  <label class="form-label" for="email">Email</label>
-                  <input class="form-input" id="email" name="email" type="email" required autocomplete="email" placeholder="alice@example.com">
-                </div>`
-              : ""
-          }
-          <div class="form-group">
-            <label class="form-label" for="password">Password${isRegister ? " (min 8 chars)" : ""}</label>
-            <input class="form-input" id="password" name="password" type="password" required minlength="${isRegister ? "8" : "1"}" autocomplete="${isRegister ? "new-password" : "current-password"}" placeholder="••••••••">
-          </div>
-          <button id="auth-submit" class="btn" type="submit" style="width:100%;margin-top:6px;padding:10px 14px;">
-            ${isRegister ? "Create Account &amp; Mint Token" : "Sign In"}
-          </button>
-        </form>
 
         <div style="margin-top:18px;padding-top:14px;border-top:1px solid var(--border);font-size:0.84rem;color:var(--muted);display:flex;justify-content:space-between;align-items:center;gap:10px;">
           <span>${isRegister ? "Already have an account?" : "New to capdux.org?"}</span>
