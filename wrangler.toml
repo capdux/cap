@@ -26,7 +26,7 @@ MAX_TARBALL_BYTES = "52428800" # 50 MiB max single archive
 [[d1_databases]]
 binding = "DB"
 database_name = "capdux-db"
-database_id = "REPLACE_WITH_D1_DATABASE_ID"
+database_id = "608974c4-7757-4798-aa58-dbd60ad23df8"
 migrations_dir = "migrations"
 
 # R2 bucket (zero-egress storage for .tar.zst source archives, prebuilt binaries & sparse index JSON)

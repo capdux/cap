@@ -169,7 +169,24 @@ export function isPermissiveLicense(license: string): boolean {
       return false;
     }
   }
-  for (const ok of ["MIT", "APACHE-2.0", "APACHE 2.0", "BSD", "ISC", "ZLIB", "CC0", "UNLICENSE", "0BSD", "MPL-2.0"]) {
+  for (const ok of [
+    "MIT",
+    "APACHE-2.0",
+    "APACHE 2.0",
+    "BSD",
+    "ISC",
+    "ZLIB",
+    "CC0",
+    "UNLICENSE",
+    "0BSD",
+    "MPL-2.0",
+    "FTL",
+    "CURL",
+    "OLDAP-2.8",
+    "IJG",
+    "LIBPNG",
+    "POSTGRESQL",
+  ]) {
     if (up.includes(ok)) return true;
   }
   return false;

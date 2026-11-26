@@ -67,6 +67,16 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
 }
 
+function computeArchiveUnpackedSize(archivePath: string, fallbackDir: string): number {
+  try {
+    const res = Bun.spawnSync(["zstd", "-dc", archivePath], { stdout: "pipe", stderr: "pipe" });
+    if (res.exitCode === 0 && res.stdout && res.stdout.byteLength > 0) {
+      return res.stdout.byteLength;
+    }
+  } catch {}
+  return computeDirUnpackedSize(fallbackDir);
+}
+
 function computeDirUnpackedSize(dir: string): number {
   let total = 0;
   const ignore = new Set([".git", ".cap", "bin", "node_modules", "cap_modules", "zig-cache", ".zig-cache"]);
@@ -342,7 +352,7 @@ async function main() {
         }
 
         const integrity = await computeSha256Integrity(archiveBytes);
-        const unpackedSize = computeDirUnpackedSize(pkg.dir);
+        const unpackedSize = computeArchiveUnpackedSize(archivePath, pkg.dir);
         const readmeMd = readOptionalText([join(pkg.dir, "README.md"), join(pkg.dir, "readme.md")]);
         const typesDcp = readOptionalText([join(pkg.dir, "src", "index.d.cp"), join(pkg.dir, "index.d.cp")]);
 

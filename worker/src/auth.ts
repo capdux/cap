@@ -72,6 +72,12 @@ export async function authenticateRequest(req: Request, env: Env): Promise<AuthU
 
   // Optional bootstrap admin key for initial CI/CD official package seeding
   if (env.ADMIN_BOOTSTRAP_KEY && constantTimeEqual(rawToken, env.ADMIN_BOOTSTRAP_KEY)) {
+    await env.DB.prepare(
+      `INSERT OR IGNORE INTO users (id, username, email, password_hash, password_salt, role)
+       VALUES (1, 'capdux-bot', 'bot@capdux.org', 'bootstrap-disabled', 'bootstrap-salt', 'admin')`,
+    )
+      .run()
+      .catch(() => {});
     return {
       id: 1,
       username: "capdux-bot",
