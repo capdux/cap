@@ -974,6 +974,14 @@ export async function renderAuthPage(env: Env, mode: "login" | "register"): Prom
         <div id="auth-err" class="alert-err" role="alert"></div>
         <div id="auth-ok" class="alert-ok" role="status"></div>
 
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px;">
+          <a class="btn-secondary" style="display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:9px 10px;text-decoration:none;border:1px solid var(--border);border-radius:8px;font-size:0.84rem;font-weight:600;color:var(--fg);" href="https://id.capdux.com/sso/oauth/github?redirect=https%3A%2F%2Fcapdux.org%2Fdashboard">GitHub</a>
+          <a class="btn-secondary" style="display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:9px 10px;text-decoration:none;border:1px solid var(--border);border-radius:8px;font-size:0.84rem;font-weight:600;color:var(--fg);" href="https://id.capdux.com/sso/oauth/google?redirect=https%3A%2F%2Fcapdux.org%2Fdashboard">Google</a>
+          <a class="btn-secondary" style="display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:9px 10px;text-decoration:none;border:1px solid var(--border);border-radius:8px;font-size:0.84rem;font-weight:600;color:var(--fg);" href="https://id.capdux.com/sso/oauth/microsoft?redirect=https%3A%2F%2Fcapdux.org%2Fdashboard">Microsoft</a>
+          <a class="btn-secondary" style="display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:9px 10px;text-decoration:none;border:1px solid var(--border);border-radius:8px;font-size:0.84rem;font-weight:600;color:var(--fg);" href="https://id.capdux.com/sso/oauth/facebook?redirect=https%3A%2F%2Fcapdux.org%2Fdashboard">Facebook</a>
+        </div>
+        <div style="text-align:center;font-size:0.78rem;color:var(--muted);margin-bottom:14px;">— or continue with capdux.org credentials —</div>
+
         <form id="auth-form" autocomplete="on">
           <div class="form-group">
             <label class="form-label" for="username">${isRegister ? "Username" : "Username or Email"}</label>
