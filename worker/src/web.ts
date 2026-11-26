@@ -473,8 +473,10 @@ export async function renderHomePage(env: Env, url: URL): Promise<Response> {
   }
   if (q) {
     const pattern = `%${q.toLowerCase()}%`;
-    whereClauses.push(`(LOWER(p.name) LIKE ? OR LOWER(p.description) LIKE ? OR LOWER(p.keywords_json) LIKE ?)`);
-    binds.push(pattern, pattern, pattern);
+    whereClauses.push(
+      `(LOWER(p.name) LIKE ? OR LOWER(p.description) LIKE ? OR LOWER(p.keywords_json) LIKE ? OR EXISTS (SELECT 1 FROM upstream_mappings um WHERE um.cp_target = p.name AND (LOWER(um.source_name) LIKE ? OR LOWER(um.aliases_json) LIKE ?)))`,
+    );
+    binds.push(pattern, pattern, pattern, pattern, pattern);
   }
 
   const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(" AND ")}` : "";
@@ -494,6 +496,20 @@ export async function renderHomePage(env: Env, url: URL): Promise<Response> {
   ]);
 
   const packages = listRes.results || [];
+  const upstreamByTarget = new Map<string, Array<{ registry: string; name: string }>>();
+  if (packages.length > 0) {
+    const placeholders = packages.map(() => "?").join(",");
+    const upRes = await env.DB.prepare(
+      `SELECT cp_target, source_registry, source_name FROM upstream_mappings WHERE cp_target IN (${placeholders}) ORDER BY source_registry ASC, source_name ASC`,
+    )
+      .bind(...packages.map((p) => p.name))
+      .all<{ cp_target: string; source_registry: string; source_name: string }>();
+    for (const row of upRes.results || []) {
+      const arr = upstreamByTarget.get(row.cp_target) || [];
+      arr.push({ registry: row.source_registry, name: row.source_name });
+      upstreamByTarget.set(row.cp_target, arr);
+    }
+  }
   const activeNav: "all" | "@cap" | "@web" = scope === "@cap" ? "@cap" : scope === "@web" ? "@web" : "all";
 
   const cardsHtml =
@@ -512,6 +528,11 @@ export async function renderHomePage(env: Env, url: URL): Promise<Response> {
               const licText = pkg.license || "MIT";
               const descText = pkg.description || "Official CP package";
               const sizeText = pkg.archive_size ? formatBytes(pkg.archive_size) : "";
+              const upList = upstreamByTarget.get(pkg.name) || [];
+              const upBadgeHtml = upList
+                .slice(0, 2)
+                .map((u) => `<span class="badge badge-ai" title="Original upstream package: ${escapeHtml(u.registry)}:${escapeHtml(u.name)}">from ${escapeHtml(u.registry)}:${escapeHtml(u.name)}</span>`)
+                .join("");
               return `<a class="pkg-card" href="${escapeHtml(href)}">
                 <div class="pkg-head">
                   <span class="pkg-name">${escapeHtml(pkg.name)}</span>
@@ -519,6 +540,7 @@ export async function renderHomePage(env: Env, url: URL): Promise<Response> {
                 </div>
                 <p class="pkg-desc">${escapeHtml(descText)}</p>
                 <div class="badges">
+                  ${upBadgeHtml}
                   <span class="badge badge-lic">${escapeHtml(licText)}</span>
                   <span class="badge badge-zst">${escapeHtml(fmt)}</span>
                   ${sizeText ? `<span class="badge">${escapeHtml(sizeText)}</span>` : ""}
@@ -647,12 +669,20 @@ export async function renderPackagePage(env: Env, pkgName: string): Promise<Resp
     return renderNotFoundPage(env, decodedName);
   }
 
-  const verRes = await env.DB.prepare(
-    `SELECT * FROM package_versions WHERE package_id = ? ORDER BY published_at DESC`,
-  )
-    .bind(pkg.id)
-    .all<VersionRow>();
+  const [verRes, upMapRes] = await Promise.all([
+    env.DB.prepare(
+      `SELECT * FROM package_versions WHERE package_id = ? ORDER BY published_at DESC`,
+    )
+      .bind(pkg.id)
+      .all<VersionRow>(),
+    env.DB.prepare(
+      `SELECT source_registry, source_name, source_repo, license FROM upstream_mappings WHERE cp_target = ? ORDER BY source_registry ASC, source_name ASC`,
+    )
+      .bind(pkg.name)
+      .all<{ source_registry: string; source_name: string; source_repo: string; license: string }>(),
+  ]);
 
+  const upstreamSources = upMapRes.results || [];
   const versions = verRes.results || [];
   const latestVer =
     versions.find((v) => v.version === pkg.latest_version) ||
@@ -837,6 +867,24 @@ export async function renderPackagePage(env: Env, pkgName: string): Promise<Resp
             ${dcpContent ? `<span class="badge badge-ai">AI-First .d.cp</span>` : ""}
           </div>
           <p class="muted" style="margin:0 0 12px;max-width:700px;">${escapeHtml(pkg.description || "Official CP package.")}</p>
+          ${
+            upstreamSources.length > 0
+              ? `<div style="margin:0 0 12px;padding:8px 12px;border-radius:8px;background:rgba(56,189,248,0.08);border:1px solid rgba(56,189,248,0.22);font-size:0.84rem;">
+                  <span class="muted">Absorbed / Referenced From:</span>
+                  ${upstreamSources
+                    .map((s) => {
+                      const safeRepo = safeUrl(s.source_repo);
+                      const label = `${s.source_registry}:${s.source_name}`;
+                      const shortTarget = pkg.name.replace(/^@[^/]+\//, "");
+                      const renamedTag = s.source_name !== shortTarget ? ` <span class="muted">(renamed from <code>${escapeHtml(s.source_name)}</code>)</span>` : "";
+                      return safeRepo
+                        ? `<a href="${escapeHtml(safeRepo)}" target="_blank" rel="noopener noreferrer" style="margin-left:8px;font-family:var(--mono);font-weight:600;">${escapeHtml(label)} &#8599;</a>${renamedTag}`
+                        : `<code style="margin-left:8px;">${escapeHtml(label)}</code>${renamedTag}`;
+                    })
+                    .join(" · ")}
+                </div>`
+              : ""
+          }
           <div class="badges">
             ${repoHref ? `<a class="pill" href="${escapeHtml(repoHref)}" target="_blank" rel="noopener noreferrer">Repository &#8599;</a>` : ""}
             ${homeHref ? `<a class="pill" href="${escapeHtml(homeHref)}" target="_blank" rel="noopener noreferrer">Homepage &#8599;</a>` : ""}

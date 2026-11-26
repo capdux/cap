@@ -52,8 +52,10 @@ export async function handleSearch(env: Env, url: URL): Promise<Response> {
 
   if (q) {
     const like = `%${q}%`;
-    whereClauses.push(`(name LIKE ? OR description LIKE ? OR keywords_json LIKE ?)`);
-    params.push(like, like, like);
+    whereClauses.push(
+      `(name LIKE ? OR description LIKE ? OR keywords_json LIKE ? OR EXISTS (SELECT 1 FROM upstream_mappings um WHERE um.cp_target = packages.name AND (um.source_name LIKE ? OR um.aliases_json LIKE ?)))`,
+    );
+    params.push(like, like, like, like, like);
   }
   if (scope) {
     if (scope === "unscoped") {
@@ -80,11 +82,33 @@ export async function handleSearch(env: Env, url: URL): Promise<Response> {
     .bind(...params, limit, offset)
     .all<PackageRow>();
 
+  const pkgRows = results || [];
+  const sourceMap = new Map<string, Array<{ registry: string; name: string; repo: string; renamed: boolean }>>();
+  if (pkgRows.length > 0) {
+    const placeholders = pkgRows.map(() => "?").join(",");
+    const mapRes = await env.DB.prepare(
+      `SELECT cp_target, source_registry, source_name, source_repo FROM upstream_mappings WHERE cp_target IN (${placeholders}) ORDER BY source_registry ASC, source_name ASC`,
+    )
+      .bind(...pkgRows.map((p) => p.name))
+      .all<{ cp_target: string; source_registry: string; source_name: string; source_repo: string }>();
+    for (const m of mapRes.results || []) {
+      const list = sourceMap.get(m.cp_target) || [];
+      const shortTarget = m.cp_target.replace(/^@[^/]+\//, "");
+      list.push({
+        registry: m.source_registry,
+        name: m.source_name,
+        repo: m.source_repo || "",
+        renamed: m.source_name !== shortTarget,
+      });
+      sourceMap.set(m.cp_target, list);
+    }
+  }
+
   return json({
     total: Number(countRow?.total ?? 0),
     limit,
     offset,
-    packages: (results || []).map((p) => ({
+    packages: pkgRows.map((p) => ({
       name: p.name,
       scope: p.scope,
       short_name: p.short_name,
@@ -93,6 +117,7 @@ export async function handleSearch(env: Env, url: URL): Promise<Response> {
       repository: p.repository,
       homepage: p.homepage,
       keywords: safeJsonParse<string[]>(p.keywords_json, []),
+      upstream_sources: sourceMap.get(p.name) || [],
       latest_version: p.latest_version,
       total_downloads: p.total_downloads,
       deprecated: p.deprecated,
