@@ -216,7 +216,8 @@ describe("capdux.org Cloudflare Worker Registry API", () => {
   beforeAll(() => {
     const initSql = readFileSync(resolve(import.meta.dir, "../../migrations/0001_init.sql"), "utf8");
     const sigSql = readFileSync(resolve(import.meta.dir, "../../migrations/0002_security_and_sig.sql"), "utf8");
-    db = new MockD1Database([initSql, sigSql]);
+    const reqSql = readFileSync(resolve(import.meta.dir, "../../migrations/0003_absorption_requests.sql"), "utf8");
+    db = new MockD1Database([initSql, sigSql, reqSql]);
     bucket = new MockR2Bucket();
     ctx = new MockExecutionContext();
     env = {
@@ -771,5 +772,43 @@ describe("capdux.org Cloudflare Worker Registry API", () => {
     expect(stats.versions).toBe(2);
     expect(stats.total_downloads).toBe(1);
     expect(stats.mappings).toBe(2);
+  });
+
+  test("POST /v1/requests & GET /v1/requests support anonymous viral absorption queue with deduplication", async () => {
+    // 1. Already-absorbed package (lru-cache) returns already_absorbed without duplicating queue
+    const dupRes = await req("/v1/requests", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ecosystem: "npm", name: "lru-cache", version: "10.0.0" }),
+    });
+    expect(dupRes.status).toBe(200);
+    const dupData = (await dupRes.json()) as any;
+    expect(dupData.status).toBe("already_absorbed");
+    expect(dupData.cp_target).toBe("@cap/lru");
+
+    // 2. New package queued anonymously (202), second request increments popularity counter
+    const q1 = await req("/v1/requests", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ecosystem: "npm", name: "zod", version: "3.24.0" }),
+    });
+    expect(q1.status).toBe(202);
+    expect(((await q1.json()) as any).request.request_count).toBe(1);
+
+    const q2 = await req("/v1/requests", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ecosystem: "npm", name: "zod", version: "3.24.1" }),
+    });
+    expect(q2.status).toBe(202);
+    expect(((await q2.json()) as any).request.request_count).toBe(2);
+
+    // 3. GET /v1/requests lists queued items sorted by demand
+    const listRes = await req("/v1/requests?status=queued");
+    expect(listRes.status).toBe(200);
+    const list = (await listRes.json()) as any;
+    expect(list.requests.length).toBe(1);
+    expect(list.requests[0].package_name).toBe("zod");
+    expect(list.requests[0].request_count).toBe(2);
   });
 });

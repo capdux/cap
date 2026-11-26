@@ -11,8 +11,10 @@ import {
 } from "./routes/registry";
 import {
   handleGetRegistryJson,
+  handleListAbsorptionRequests,
   handleSearch,
   handleStats,
+  handleSubmitAbsorptionRequest,
   handleSyncRegistry,
 } from "./routes/search";
 import { getWellKnownKeysDoc } from "./signing";
@@ -159,6 +161,14 @@ export default {
 
       if (pathname === "/v1/registry/sync" && request.method === "POST") {
         return withCors(await handleSyncRegistry(request, env));
+      }
+
+      // 3b. Anonymous viral ecosystem absorption request queue (`cap from -npm/-crate`)
+      if (pathname === "/v1/requests" && request.method === "POST") {
+        return withCors(await handleSubmitAbsorptionRequest(request, env));
+      }
+      if (pathname === "/v1/requests" && request.method === "GET") {
+        return withCors(await handleListAbsorptionRequests(env, url));
       }
 
       // 4. Auth API
