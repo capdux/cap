@@ -240,7 +240,7 @@ export async function handleSyncRegistry(req: Request, env: Env): Promise<Respon
   }
 
   const today = new Date().toISOString().slice(0, 10);
-  let synced = 0;
+  const stmts: D1PreparedStatement[] = [];
 
   for (const item of entries) {
     if (!item || typeof item !== "object") continue;
@@ -259,19 +259,19 @@ export async function handleSyncRegistry(req: Request, env: Env): Promise<Respon
     const absorbedAt =
       typeof e.absorbed_at === "string" && e.absorbed_at.trim() ? e.absorbed_at.trim() : today;
 
-    await env.DB.prepare(
-      `INSERT INTO upstream_mappings
-       (source_registry, source_name, source_repo, license, cp_target, kind, aliases_json, absorbed_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(source_registry, source_name) DO UPDATE SET
-         source_repo = excluded.source_repo,
-         license = excluded.license,
-         cp_target = excluded.cp_target,
-         kind = excluded.kind,
-         aliases_json = excluded.aliases_json,
-         absorbed_at = excluded.absorbed_at`,
-    )
-      .bind(
+    stmts.push(
+      env.DB.prepare(
+        `INSERT INTO upstream_mappings
+         (source_registry, source_name, source_repo, license, cp_target, kind, aliases_json, absorbed_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(source_registry, source_name) DO UPDATE SET
+           source_repo = excluded.source_repo,
+           license = excluded.license,
+           cp_target = excluded.cp_target,
+           kind = excluded.kind,
+           aliases_json = excluded.aliases_json,
+           absorbed_at = excluded.absorbed_at`,
+      ).bind(
         sourceRegistry,
         sourceName,
         sourceRepo,
@@ -280,11 +280,15 @@ export async function handleSyncRegistry(req: Request, env: Env): Promise<Respon
         kind,
         JSON.stringify(aliases),
         absorbedAt,
-      )
-      .run();
-
-    synced++;
+      ),
+    );
   }
+
+  const BATCH_SIZE = 100;
+  for (let i = 0; i < stmts.length; i += BATCH_SIZE) {
+    await env.DB.batch(stmts.slice(i, i + BATCH_SIZE));
+  }
+  const synced = stmts.length;
 
   const doc = await buildRegistryJsonDoc(env);
   await env.BUCKET.put(REGISTRY_JSON_R2_KEY, JSON.stringify(doc, null, 2), {

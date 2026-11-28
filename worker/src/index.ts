@@ -5,6 +5,7 @@ import { handleAuthRoutes } from "./routes/auth_routes";
 import {
   handleDownload,
   handleGetPackage,
+  handleGetPackument,
   handlePublish,
   handleSparseIndex,
   handleYank,
@@ -197,6 +198,21 @@ export default {
       if (request.method === "GET" && pathname.startsWith("/v1/packages/")) {
         const pkgName = pathname.slice("/v1/packages/".length);
         return withCors(await handleGetPackage(env, pkgName));
+      }
+
+      // 7b. Standard cap/npm packument endpoint on registry.capdux.org (GET /<encoded_pkg>)
+      if (
+        request.method === "GET" &&
+        (url.hostname === "registry.capdux.org" || url.hostname.startsWith("registry.")) &&
+        pathname.length > 1 &&
+        !pathname.startsWith("/v1/") &&
+        !pathname.startsWith("/index/") &&
+        !pathname.startsWith("/dl/") &&
+        !pathname.startsWith("/.well-known/") &&
+        pathname !== "/health"
+      ) {
+        const pkgName = pathname.slice(1);
+        return withCors(await handleGetPackument(env, pkgName));
       }
 
       // 8. Search & Stats API

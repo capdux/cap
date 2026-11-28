@@ -57,6 +57,69 @@ function safeJsonParse<T>(raw: string, fallback: T): T {
 }
 
 /**
+ * GET /<encoded_pkg> on registry.capdux.org (npm/cap packument format for `cap add`)
+ */
+export async function handleGetPackument(env: Env, rawName: string): Promise<Response> {
+  const pkgName = safeDecode(rawName).replace(/^\/+|\/+$/g, "");
+  if (!splitPackageName(pkgName)) {
+    return json({ error: "Invalid package name" }, 400);
+  }
+
+  const pkg = await env.DB.prepare(`SELECT * FROM packages WHERE name = ? LIMIT 1`)
+    .bind(pkgName)
+    .first<PackageRow>();
+
+  if (!pkg) {
+    return json({ error: `Package '${pkgName}' not found` }, 404);
+  }
+
+  const { results } = await env.DB.prepare(
+    `SELECT * FROM package_versions WHERE package_id = ? ORDER BY published_at DESC, id DESC`,
+  )
+    .bind(pkg.id)
+    .all<VersionRow>();
+
+  const rows = results || [];
+  const dlOrigin = env.DOWNLOAD_ORIGIN || "https://dl.capdux.org";
+
+  const distTags: Record<string, string> = {};
+  if (pkg.latest_version) {
+    distTags.latest = pkg.latest_version;
+  }
+  const versionsMap: Record<string, unknown> = {};
+  for (const v of rows) {
+    if (!v.yanked && v.dist_tag && !(v.dist_tag in distTags)) {
+      distTags[v.dist_tag] = v.version;
+    }
+    versionsMap[v.version] = {
+      name: pkg.name,
+      version: v.version,
+      description: pkg.description,
+      license: pkg.license,
+      dist: {
+        tarball: `${dlOrigin}/${v.r2_key}`,
+        integrity: v.integrity,
+        unpackedSize: v.unpacked_size,
+      },
+      tarball: `${dlOrigin}/${v.r2_key}`,
+      integrity: v.integrity,
+      dependencies: safeJsonParse<Record<string, string>>(v.deps_json, {}),
+      binaries: safeJsonParse<Record<string, unknown>>(v.prebuilt_json, {}),
+      yanked: Boolean(v.yanked),
+    };
+  }
+
+  return json({
+    name: pkg.name,
+    description: pkg.description,
+    license: pkg.license,
+    repository: pkg.repository,
+    "dist-tags": distTags,
+    versions: versionsMap,
+  });
+}
+
+/**
  * GET /v1/packages/<name>
  * Supports both scoped (@scope/name) and unscoped (name) packages.
  */

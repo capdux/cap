@@ -35,6 +35,12 @@ const CAPDUX_URL = (process.env.CAPDUX_URL || "https://registry.capdux.org").rep
 const CAPDUX_TOKEN = (process.env.CAPDUX_TOKEN || "").trim();
 const CP_REPO = resolve(process.env.CP_REPO || "/data/dev/cp");
 const DRY_RUN = process.env.DRY_RUN === "1" || process.env.DRY_RUN === "true";
+const PKG_FILTER = (process.env.PKG_FILTER || "")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+const PKG_FILTER_SET = new Set(PKG_FILTER);
+const SKIP_REGISTRY_SYNC = process.env.SKIP_REGISTRY_SYNC === "1" || process.env.SKIP_REGISTRY_SYNC === "true";
 
 const ZSTD_MAGIC = [0x28, 0xb5, 0x2f, 0xfd] as const;
 
@@ -106,36 +112,53 @@ function computeDirUnpackedSize(dir: string): number {
 }
 
 function discoverOfficialPackages(cpRepo: string): DiscoveredPackage[] {
-  const scopes = ["@cap", "@web"];
+  const packagesRoot = join(cpRepo, "packages");
   const found: DiscoveredPackage[] = [];
+  if (!existsSync(packagesRoot)) return found;
 
-  for (const scope of scopes) {
-    const scopeDir = join(cpRepo, "packages", scope);
-    if (!existsSync(scopeDir)) continue;
-
-    const entries = readdirSync(scopeDir).sort();
-    for (const entry of entries) {
-      const pkgDir = join(scopeDir, entry);
-      let isDir = false;
-      try {
-        isDir = statSync(pkgDir).isDirectory();
-      } catch {
-        continue;
+  const tryAddPkg = (pkgDir: string, scope: string, folderName: string) => {
+    const manifestPath = join(pkgDir, "cap.json");
+    if (!existsSync(manifestPath)) return;
+    try {
+      const raw = readFileSync(manifestPath, "utf8");
+      const manifest = JSON.parse(raw) as CapManifest;
+      const defaultName = scope ? `${scope}/${folderName}` : folderName;
+      const name = (manifest.name || defaultName).trim();
+      if (PKG_FILTER_SET.size > 0 && !PKG_FILTER_SET.has(name) && !PKG_FILTER_SET.has(folderName)) {
+        return;
       }
-      if (!isDir) continue;
+      const version = (manifest.ver || manifest.version || "1.0.0").trim();
+      found.push({ dir: pkgDir, scope, folderName, manifest, name, version });
+    } catch (err) {
+      console.error(`[WARN] Skipping invalid cap.json in ${pkgDir}:`, err);
+    }
+  };
 
-      const manifestPath = join(pkgDir, "cap.json");
-      if (!existsSync(manifestPath)) continue;
+  const topEntries = readdirSync(packagesRoot).sort();
+  for (const entry of topEntries) {
+    if (entry.startsWith(".")) continue;
+    const full = join(packagesRoot, entry);
+    let isDir = false;
+    try {
+      isDir = statSync(full).isDirectory();
+    } catch {
+      continue;
+    }
+    if (!isDir) continue;
 
-      try {
-        const raw = readFileSync(manifestPath, "utf8");
-        const manifest = JSON.parse(raw) as CapManifest;
-        const name = (manifest.name || `${scope}/${entry}`).trim();
-        const version = (manifest.ver || manifest.version || "1.0.0").trim();
-        found.push({ dir: pkgDir, scope, folderName: entry, manifest, name, version });
-      } catch (err) {
-        console.error(`[WARN] Skipping invalid cap.json in ${pkgDir}:`, err);
+    if (entry.startsWith("@")) {
+      const subEntries = readdirSync(full).sort();
+      for (const sub of subEntries) {
+        const subDir = join(full, sub);
+        try {
+          if (!statSync(subDir).isDirectory()) continue;
+        } catch {
+          continue;
+        }
+        tryAddPkg(subDir, entry, sub);
       }
+    } else {
+      tryAddPkg(full, "", entry);
     }
   }
 
@@ -244,7 +267,11 @@ async function publishPackage(
     version: pkg.version,
     description: pkg.manifest.description || "",
     license: pkg.manifest.license || "MIT",
-    repository: pkg.manifest.repository || `https://github.com/cp-lang/cp/tree/main/packages/${pkg.scope}/${pkg.folderName}`,
+    repository:
+      pkg.manifest.repository ||
+      (pkg.scope
+        ? `https://github.com/capdux/cp/tree/main/packages/${pkg.scope}/${pkg.folderName}`
+        : `https://github.com/capdux/cp/tree/main/packages/${pkg.folderName}`),
     homepage: pkg.manifest.homepage || "",
     keywords: Array.isArray(pkg.manifest.keywords) ? pkg.manifest.keywords : [],
     manifest: pkg.manifest,
@@ -283,9 +310,12 @@ async function publishPackage(
 }
 
 async function syncRegistryJson(cpRepo: string): Promise<number> {
-  const registryPath = join(cpRepo, "packages", "@cap", "registry.json");
+  if (SKIP_REGISTRY_SYNC) return 0;
+  const primaryPath = join(cpRepo, "packages", "registry.json");
+  const legacyPath = join(cpRepo, "packages", "@cap", "registry.json");
+  const registryPath = existsSync(primaryPath) ? primaryPath : legacyPath;
   if (!existsSync(registryPath)) {
-    console.warn(`[WARN] registry.json not found at ${registryPath}, skipping sync.`);
+    console.warn(`[WARN] registry.json not found at ${primaryPath} or ${legacyPath}, skipping sync.`);
     return 0;
   }
 
